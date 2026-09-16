@@ -50,7 +50,7 @@ Session model ──────────────────────
 dsh plugin --profile web add file:/path/to/context-distiller
 
 # From GitHub
-dsh plugin --profile web add "github:<owner>/context-distiller#main"
+dsh plugin --profile web add "github:Leopan0/context-distiller#main"
 ```
 
 Restart `dsh web` after installing.
@@ -110,7 +110,7 @@ pnpm run gates      # consistency checks
 
 ### License
 
-MIT
+AGPL-3.0-or-later. Commercial licenses available on request.
 
 ---
 
@@ -155,7 +155,7 @@ MIT
 dsh plugin --profile web add file:/path/to/context-distiller
 
 # 从 GitHub
-dsh plugin --profile web add "github:<owner>/context-distiller#main"
+dsh plugin --profile web add "github:Leopan0/context-distiller#main"
 ```
 
 安装后重启 `dsh web`。
@@ -214,4 +214,4 @@ pnpm run gates      # 一致性检查
 
 ### 许可证
 
-MIT
+AGPL-3.0-or-later。可联系作者获取商业许可。

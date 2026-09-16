@@ -27,10 +27,10 @@
     "cordis.patch.yml",
     "README.md"
   ],
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<owner>/context-distiller.git"
+    "url": "git+https://github.com/Leopan0/context-distiller.git"
   },
   "keywords": [
     "deepseek-harness",
