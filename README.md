@@ -50,7 +50,7 @@ Session model ──────────────────────
 dsh plugin --profile web add file:/path/to/context-distiller
 
 # From GitHub
-dsh plugin --profile web add "github:Leopan0/context-distiller#main"
+dsh plugin --profile web add "github:Leopan0/ContextDistiller#main"
 ```
 
 Restart `dsh web` after installing.
@@ -155,7 +155,7 @@ AGPL-3.0-or-later. Commercial licenses available on request.
 dsh plugin --profile web add file:/path/to/context-distiller
 
 # 从 GitHub
-dsh plugin --profile web add "github:Leopan0/context-distiller#main"
+dsh plugin --profile web add "github:Leopan0/ContextDistiller#main"
 ```
 
 安装后重启 `dsh web`。
