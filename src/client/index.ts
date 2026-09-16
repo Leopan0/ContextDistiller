@@ -41,6 +41,9 @@ const TXT = {
     loadFail: '加载配置失败',
     loading: '加载中...',
     custom: '（自定义）',
+    filterSection: '压缩过滤',
+    filterToggle: '压缩时过滤被标记为有问题的对话',
+    filterHint: '在会话中对回答点"有问题"（/feedback）后，该轮对话不会进入压缩摘要。与独立模型开关互不影响。',
   },
   en: {
     title: 'Context Distiller',
@@ -61,12 +64,16 @@ const TXT = {
     loadFail: 'Failed to load config',
     loading: 'Loading...',
     custom: ' (custom)',
+    filterSection: 'Compaction filter',
+    filterToggle: 'Filter out conversations reported as problematic during compaction',
+    filterHint: 'After you report an answer via the "report problem" action (/feedback), that whole turn is kept out of the compaction summary. Independent of the dedicated-model toggle.',
   },
 };
 
 /** Current config snapshot returned by GET /context-distiller/config. */
 interface ConfigSnapshot {
   compact: { enabled: boolean; provider: string; model: string };
+  filter: { flaggedTurns: boolean };
   engine: { enabled: boolean; thresholdRatio: number; retainRatio: number };
 }
 
@@ -96,6 +103,8 @@ const S = {
   } as const,
   hint: { fontSize: '12px', color: 'var(--dsh-text-sec, #888)', marginTop: '-8px', marginBottom: '12px' },
   status: { fontSize: '12px', marginTop: '8px' },
+  divider: { border: 'none', borderTop: '1px solid var(--dsh-border, #e5e7eb)', margin: '16px 0' },
+  sectionTitle: { margin: '0 0 12px', fontSize: '13px', fontWeight: 600, color: 'var(--dsh-text-sec, #666)' },
 };
 
 /** Settings panel component. Receives `t` from slots.inject. */
@@ -103,6 +112,7 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
   const [enabled, setEnabled] = useState(false);
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
+  const [filterFlagged, setFilterFlagged] = useState(false);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -117,6 +127,7 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
         setEnabled(cfg.compact.enabled);
         setProvider(cfg.compact.provider || '');
         setModel(cfg.compact.model || '');
+        setFilterFlagged(cfg.filter?.flaggedTurns ?? false);
         setProviders(list || []);
         setLoaded(true);
       })
@@ -144,6 +155,9 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
             enabled,
             provider: enabled ? provider : '',
             model: enabled ? model : '',
+          },
+          filter: {
+            flaggedTurns: filterFlagged,
           },
         }),
       });
@@ -217,6 +231,20 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
       ),
     ),
     enabled && React.createElement('div', { style: S.hint }, t('modelHint')),
+    // Flagged-turn filter section (independent of the dedicated-model toggle)
+    React.createElement('hr', { style: S.divider }),
+    React.createElement('h4', { style: S.sectionTitle }, t('filterSection')),
+    React.createElement('div', { style: S.row },
+      React.createElement('label', { style: { ...S.label, display: 'flex', alignItems: 'center', gap: '6px' } },
+        React.createElement('input', {
+          type: 'checkbox',
+          style: S.toggle,
+          checked: filterFlagged,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFilterFlagged(e.target.checked),
+        }),
+        t('filterToggle')),
+    ),
+    React.createElement('div', { style: { ...S.hint, marginTop: '0' } }, t('filterHint')),
     // Save
     React.createElement('button', {
       style: S.btn,

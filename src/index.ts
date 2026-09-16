@@ -43,11 +43,13 @@ export const name = PLUGIN_NAME;
  *
  * - `llm`: the model seam the waterfall listener hooks and streams through.
  * - `webServer`: hosts the `/context-distiller/health` smoke route.
+ * - `sessions`: resolves the live session of a compaction call so flagged
+ *   turns (`feedback/record`) can be filtered out of the summarization input.
  *
  * `dshLoader` is deliberately NOT required: the core router has no module-level
  * dsh dependency. It is probed optionally via `ctx.get` for the engine.
  */
-export const inject = ['llm', 'webServer'];
+export const inject = ['llm', 'webServer', 'sessions'];
 
 /** Structural shape of `ctx.dshLoader`; only populated when dsh-loader is installed. */
 interface DshLoaderApi extends DshFacade {}
@@ -74,6 +76,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
   const resolved = (): ResolvedPluginConfig => {
     const raw: PluginConfig = { ...config, ...runtimeOverride,
       compact: { ...config.compact, ...runtimeOverride?.compact },
+      filter: { ...config.filter, ...runtimeOverride?.filter },
       engine: { ...config.engine, ...runtimeOverride?.engine },
     };
     if (raw === lastRaw && lastGood !== undefined) return lastGood;
@@ -113,6 +116,9 @@ export function apply(ctx: Context, config: PluginConfig): void {
           provider: r.compact.provider || null,
           model: r.compact.model || null
         },
+        filter: {
+          flaggedTurns: r.filter.flaggedTurns
+        },
         engine: {
           enabled: r.engine.enabled,
           thresholdRatio: r.engine.thresholdRatio,
@@ -135,6 +141,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
         const r = resolved();
         const body = JSON.stringify({
           compact: { enabled: r.compact.enabled, provider: r.compact.provider, model: r.compact.model },
+          filter: { flaggedTurns: r.filter.flaggedTurns },
           engine: { enabled: r.engine.enabled, thresholdRatio: r.engine.thresholdRatio, retainRatio: r.engine.retainRatio }
         });
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -152,15 +159,19 @@ export function apply(ctx: Context, config: PluginConfig): void {
               provider: body.compact?.provider ?? cur.compact.provider,
               model: body.compact?.model ?? cur.compact.model,
             },
+            filter: {
+              flaggedTurns: body.filter?.flaggedTurns ?? cur.filter.flaggedTurns,
+            },
           };
           lastRaw = undefined; // force re-resolve
           const r = resolved();
           ctx.logger.info(
             `context-distiller config updated (router: ${r.compact.enabled ? 'on' : 'off'}, ` +
-            `provider: ${r.compact.provider}, model: ${r.compact.model})`
+            `provider: ${r.compact.provider}, model: ${r.compact.model}; ` +
+            `flagged-turn filter: ${r.filter.flaggedTurns ? 'on' : 'off'})`
           );
           res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, compact: r.compact }));
+          res.end(JSON.stringify({ ok: true, compact: r.compact, filter: r.filter }));
         } catch (error) {
           ctx.logger.error('context-distiller: config update failed');
           ctx.logger.error(error);
@@ -247,7 +258,8 @@ export function apply(ctx: Context, config: PluginConfig): void {
   }
 
   ctx.logger.info(
-    `context-distiller loaded (router: ${resolved().compact.enabled ? 'on' : 'off'}, engine: ${
+    `context-distiller loaded (router: ${resolved().compact.enabled ? 'on' : 'off'}, ` +
+    `flagged-turn filter: ${resolved().filter.flaggedTurns ? 'on' : 'off'}, engine: ${
       resolved().engine.enabled ? 'on' : 'off'
     })`
   );

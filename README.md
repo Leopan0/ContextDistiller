@@ -19,6 +19,11 @@ while your chat model stays untouched — all configurable from the web UI.
 - **Settings panel** — A browser-side UI in DSH web settings. Toggle the
   dedicated model on/off, pick provider & model from dropdowns populated by
   `ctx.llm`. Changes take effect immediately, no restart needed.
+- **Flagged-answer filter** — When enabled, every conversation turn you report
+  as problematic (the web feedback action or `/feedback`) is dropped from the
+  compaction input, so a bad answer never enters the checkpoint summary. Works
+  with the stock compaction backend and is independent of the dedicated-model
+  toggle.
 - **Bilingual** — UI text follows the DSH interface locale (Chinese / English).
 - **Optional explicit-prompt engine** — A `BasicCompactionEngine` subclass with
   a structured checkpoint prompt. Requires `@dsh-plugin/dsh-loader`.
@@ -68,6 +73,8 @@ config:
     enabled: true
     provider: deepseek-official
     model: deepseek-chat
+  filter:
+    flaggedTurns: true
   engine:
     enabled: false
 ```
@@ -81,6 +88,12 @@ config:
 | `enabled` | boolean | `false` | Turn the rerouting on/off. |
 | `provider` | string | `""` | Registered provider route. |
 | `model` | string | `""` | Model id under that provider. |
+
+#### `filter` — compaction input filtering
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `flaggedTurns` | boolean | `false` | Drop the whole conversation turn reported via the web feedback action / `/feedback` (`feedback/record`) from compaction summaries. |
 
 #### `engine` — optional explicit-prompt backend
 
@@ -126,6 +139,9 @@ AGPL-3.0-or-later. Commercial licenses available on request.
   的 provider/model。对会话调用零影响。
 - **设置面板** — 在 DSH 网页设置中提供浏览器端 UI。开关切换、下拉选择
   provider 和 model（列表来自 `ctx.llm`）。保存即时生效，无需重启。
+- **问题回答过滤** — 开启后，你在会话中点"有问题"反馈（网页反馈按钮或
+  `/feedback`）的那一整轮对话，会在压缩时从摘要输入中剔除，错误回答不会
+  进入 checkpoint 摘要。对 stock 压缩后端同样生效，与独立模型开关互不影响。
 - **中英双语** — UI 文案跟随 DSH 界面语言自动切换。
 - **可选显式 prompt 压缩引擎** — `BasicCompactionEngine` 子类，使用结构化
   checkpoint prompt。需要 `@dsh-plugin/dsh-loader`。
@@ -172,6 +188,8 @@ config:
     enabled: true
     provider: deepseek-official
     model: deepseek-chat
+  filter:
+    flaggedTurns: true
   engine:
     enabled: false
 ```
@@ -185,6 +203,12 @@ config:
 | `enabled` | boolean | `false` | 是否开启改道。 |
 | `provider` | string | `""` | 已注册的提供商路由。 |
 | `model` | string | `""` | 该提供商下的模型 id。 |
+
+#### `filter` — 压缩输入过滤
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `flaggedTurns` | boolean | `false` | 压缩摘要时剔除整轮被网页反馈 / `/feedback`（`feedback/record` 事件）标记为有问题的对话。 |
 
 #### `engine` — 可选显式 prompt 后端
 

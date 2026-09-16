@@ -1,6 +1,6 @@
 {
   "name": "context-distiller",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness plugin: run context compaction with a dedicated model separate from the conversation model.",
   "type": "module",
   "main": "lib/index.js",

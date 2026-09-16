@@ -11,6 +11,10 @@
 # `compact.enabled` stays off by default. When the user enables the plugin
 # in the settings panel, they must pick a provider/model from the Harness
 # model list — there are no hardcoded defaults.
+#
+# `filter.flaggedTurns` also stays off by default: when on, conversation
+# turns the user reports via the web feedback action / /feedback
+# (`feedback/record` session events) are excluded from compaction summaries.
 - insert:
     - id: context-distiller
       name: context-distiller
@@ -19,5 +23,7 @@
           enabled: false
           provider: ''
           model: ''
+        filter:
+          flaggedTurns: false
         engine:
           enabled: false

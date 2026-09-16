@@ -1,15 +1,25 @@
 /**
- * Dedicated-model routing for context compaction.
+ * Dedicated-model routing and flagged-turn filtering for context compaction.
  *
- * A `llm/stream` waterfall listener: every call classified with
- * `purpose: 'compaction'` (issued by the compaction backend for its summary
- * request) is rerouted to the configured dedicated summarizer pair, while the
- * conversation's own model route stays untouched. This is the core of
- * "compress the context with a separate model" and requires no change to the
- * compaction backend's own configuration.
+ * A single `llm/stream` waterfall listener handles two independent layers,
+ * both scoped to calls classified with `purpose: 'compaction'`:
  *
- * When routing is disabled (or the pair is incomplete) the listener is a pure
- * pass-through.
+ *   1. Flagged-turn filter (optional, `filter.flaggedTurns`): removes the
+ *      messages of conversation turns the user marked as problematic
+ *      (`feedback/record`) from the summarization input, so a bad exchange
+ *      never enters the checkpoint summary. Works with the stock
+ *      dsh-compaction-basic backend AND the plugin's own engine.
+ *   2. Dedicated-model router (optional, `compact.enabled`): reroutes the
+ *      call to the configured dedicated summarizer pair, leaving the
+ *      conversation model route untouched.
+ *
+ * When neither layer activates the listener is a pure pass-through. Both
+ * layers are independent: filtering works without a dedicated model and vice
+ * versa.
+ *
+ * Re-entry guard: whenever the options are altered we re-enter
+ * `ctx.llm.stream` with a symbol marker so the listener's own re-dispatch is
+ * recognized and passed straight through `next()` (preventing a loop).
  *
  * @module context-distiller/compact-router
  */
@@ -21,10 +31,7 @@ export declare function compactRoute(get: () => ResolvedPluginConfig): {
     model: string;
 } | undefined;
 /**
- * Install the compaction rerouting middleware.
- *
- * The waterfall listener returns its own stream when rerouting is needed
- * (guarded against re-entry by the route-match check) and delegates via
- * `next()` otherwise. Returns a disposer that removes the listener.
+ * Install the compaction filter + rerouting middleware. Returns a disposer
+ * that removes the listener.
  */
 export declare function installCompactRouter(ctx: Context, get: () => ResolvedPluginConfig): () => void;

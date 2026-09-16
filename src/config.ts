@@ -57,6 +57,14 @@ const Config = z.object({
       .string()
       .description('The provider-owned model id used for compaction summaries.')
   }),
+  filter: z.object({
+    flaggedTurns: z
+      .boolean()
+      .default(false)
+      .description(
+        'During compaction, drop every message of conversation turns the user flagged with feedback/record (the web "report a problem" / /feedback action) so flagged exchanges never enter the checkpoint summary. Independent of the dedicated-model router.'
+      )
+  }),
   engine: z.object({
     enabled: z
       .boolean()
@@ -88,6 +96,11 @@ export interface ResolvedCompactConfig {
   readonly model: string;
 }
 
+/** Resolved compaction-filter policy. */
+export interface ResolvedFilterConfig {
+  readonly flaggedTurns: boolean;
+}
+
 /** Resolved compression-engine policy. */
 export interface ResolvedEngineConfig {
   readonly enabled: boolean;
@@ -103,6 +116,7 @@ export interface ResolvedEngineConfig {
 /** The complete resolved, frozen plugin snapshot. */
 export interface ResolvedPluginConfig {
   readonly compact: ResolvedCompactConfig;
+  readonly filter: ResolvedFilterConfig;
   readonly engine: ResolvedEngineConfig;
 }
 
@@ -123,6 +137,7 @@ function deepFreeze<T>(value: T): T {
  */
 export function resolvePluginConfig(config: PluginConfig): ResolvedPluginConfig {
   const compact = config?.compact ?? {};
+  const filter = config?.filter ?? {};
   const engine = config?.engine ?? {};
 
   const compactProvider = typeof compact.provider === 'string' ? compact.provider : '';
@@ -147,6 +162,9 @@ export function resolvePluginConfig(config: PluginConfig): ResolvedPluginConfig 
       enabled: compact.enabled ?? false,
       provider: compactProvider,
       model: compactModel
+    },
+    filter: {
+      flaggedTurns: filter.flaggedTurns ?? false
     },
     engine: {
       enabled: engine.enabled ?? false,

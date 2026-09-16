@@ -34,6 +34,11 @@ declare const Config: z<Schemastery.ObjectS<{
         provider: z<string, string>;
         model: z<string, string>;
     }>>;
+    filter: z<Schemastery.ObjectS<{
+        flaggedTurns: z<boolean, boolean>;
+    }>, Schemastery.ObjectT<{
+        flaggedTurns: z<boolean, boolean>;
+    }>>;
     engine: z<Schemastery.ObjectS<{
         enabled: z<boolean, boolean>;
         thresholdRatio: z<number, number>;
@@ -63,6 +68,11 @@ declare const Config: z<Schemastery.ObjectS<{
         provider: z<string, string>;
         model: z<string, string>;
     }>>;
+    filter: z<Schemastery.ObjectS<{
+        flaggedTurns: z<boolean, boolean>;
+    }>, Schemastery.ObjectT<{
+        flaggedTurns: z<boolean, boolean>;
+    }>>;
     engine: z<Schemastery.ObjectS<{
         enabled: z<boolean, boolean>;
         thresholdRatio: z<number, number>;
@@ -91,6 +101,10 @@ export interface ResolvedCompactConfig {
     readonly provider: string;
     readonly model: string;
 }
+/** Resolved compaction-filter policy. */
+export interface ResolvedFilterConfig {
+    readonly flaggedTurns: boolean;
+}
 /** Resolved compression-engine policy. */
 export interface ResolvedEngineConfig {
     readonly enabled: boolean;
@@ -105,6 +119,7 @@ export interface ResolvedEngineConfig {
 /** The complete resolved, frozen plugin snapshot. */
 export interface ResolvedPluginConfig {
     readonly compact: ResolvedCompactConfig;
+    readonly filter: ResolvedFilterConfig;
     readonly engine: ResolvedEngineConfig;
 }
 /**
