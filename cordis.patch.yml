@@ -1,0 +1,23 @@
+# The context-distiller bundle patch: inserts this plugin into the profile
+# entry list. Declared via `dsh.bundle.patch` in package.json, so
+# `dsh plugin add` reconciles the package into `dsh.profile.bundles` and the
+# profile boot applies this layer automatically — no manual cordis.patch.yml
+# edit needed.
+#
+# The patch applies over an empty entry list (bundle layers compose before the
+# profile's own cordis.patch.yml), so it is a bare `insert`. The id/name MUST
+# equal package.json#name.
+#
+# `compact.enabled` stays off by default. When the user enables the plugin
+# in the settings panel, they must pick a provider/model from the Harness
+# model list — there are no hardcoded defaults.
+- insert:
+    - id: context-distiller
+      name: context-distiller
+      config:
+        compact:
+          enabled: false
+          provider: ''
+          model: ''
+        engine:
+          enabled: false

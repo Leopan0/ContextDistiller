@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build logs / OS files
+*.log
+.DS_Store
+Thumbss.db
+
+# TypeScript incremental info (declaration output in lib/ is committed on
+# purpose: git-source installs do not run build scripts, so lib/ must ship).
+*.tsbuildinfo
+
+# Local env
+.env
+.env.*
