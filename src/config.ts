@@ -10,6 +10,7 @@
  * @module context-distiller/config
  */
 import z from 'schemastery';
+import { deepFreeze } from './dsh.js';
 
 /**
  * Stable plugin id: the cordis plugin name, the npm package name, the bundle
@@ -65,6 +66,14 @@ const Config = z.object({
         'During compaction, drop every message of conversation turns the user flagged with feedback/record (the web "report a problem" / /feedback action) so flagged exchanges never enter the checkpoint summary. Independent of the dedicated-model router.'
       )
   }),
+  threshold: z.object({
+    wan: z.number().step(1).min(0).max(100).default(0).description(
+      'Absolute compaction trigger in 10k-token units (wan), converted per routed model at check time. ' +
+      '0 (default) keeps the compaction backend ratio policy untouched; 1-100 spans 10k-1M tokens, ' +
+      'e.g. 8 compacts once measured context reaches 80000 tokens. Clamped to the model window when ' +
+      'larger. A backend modelPolicies entry with its own thresholdRatio still takes precedence.'
+    )
+  }),
   engine: z.object({
     enabled: z
       .boolean()
@@ -101,6 +110,11 @@ export interface ResolvedFilterConfig {
   readonly flaggedTurns: boolean;
 }
 
+/** Resolved absolute-threshold policy (units of 10k tokens; 0 = untouched). */
+export interface ResolvedThresholdConfig {
+  readonly wan: number;
+}
+
 /** Resolved compression-engine policy. */
 export interface ResolvedEngineConfig {
   readonly enabled: boolean;
@@ -117,18 +131,30 @@ export interface ResolvedEngineConfig {
 export interface ResolvedPluginConfig {
   readonly compact: ResolvedCompactConfig;
   readonly filter: ResolvedFilterConfig;
+  readonly threshold: ResolvedThresholdConfig;
   readonly engine: ResolvedEngineConfig;
 }
 
-/** Recursively freeze a value so resolved snapshots cannot be mutated at runtime. */
-function deepFreeze<T>(value: T): T {
-  if (value === null || typeof value !== 'object') return value;
-  if (Object.isFrozen(value)) return value;
-  Object.freeze(value);
-  for (const key of Object.keys(value as Record<string, unknown>)) {
-    deepFreeze((value as Record<string, unknown>)[key]);
-  }
-  return value;
+/** Ratio-policy fields shared verbatim by the engine constructor config and the per-check refresh. */
+export interface EngineRatioPolicy {
+  readonly thresholdRatio: number;
+  readonly retainRatio: number;
+  readonly maxTokens: number;
+  readonly compactionRetries: number;
+  readonly maxOverflowRetries: number;
+  readonly auto: boolean;
+}
+
+/** Map the resolved engine policy onto the backend's config vocabulary. */
+export function engineRatioPolicy(engine: ResolvedEngineConfig): EngineRatioPolicy {
+  return {
+    thresholdRatio: engine.thresholdRatio,
+    retainRatio: engine.retainRatio,
+    maxTokens: engine.maxTokens,
+    compactionRetries: engine.compactionRetries,
+    maxOverflowRetries: engine.maxOverflowRetries,
+    auto: engine.auto
+  };
 }
 
 /**
@@ -138,12 +164,20 @@ function deepFreeze<T>(value: T): T {
 export function resolvePluginConfig(config: PluginConfig): ResolvedPluginConfig {
   const compact = config?.compact ?? {};
   const filter = config?.filter ?? {};
+  const threshold = config?.threshold ?? {};
   const engine = config?.engine ?? {};
 
   const compactProvider = typeof compact.provider === 'string' ? compact.provider : '';
   const compactModel = typeof compact.model === 'string' ? compact.model : '';
   if (Boolean(compactProvider) !== Boolean(compactModel)) {
     throw new Error('context-distiller: compact.provider and compact.model must be set together');
+  }
+
+  const thresholdWan = threshold.wan ?? 0;
+  if (!Number.isInteger(thresholdWan) || thresholdWan < 0 || thresholdWan > 100) {
+    throw new Error(
+      'context-distiller: threshold.wan must be an integer between 0 and 100 (units of 10000 tokens)'
+    );
   }
 
   const thresholdRatio = engine.thresholdRatio ?? 0.8;
@@ -165,6 +199,9 @@ export function resolvePluginConfig(config: PluginConfig): ResolvedPluginConfig 
     },
     filter: {
       flaggedTurns: filter.flaggedTurns ?? false
+    },
+    threshold: {
+      wan: thresholdWan
     },
     engine: {
       enabled: engine.enabled ?? false,

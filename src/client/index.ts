@@ -44,6 +44,9 @@ const TXT = {
     filterSection: '压缩过滤',
     filterToggle: '压缩时过滤被标记为有问题的对话',
     filterHint: '在会话中对回答点"有问题"（/feedback）后，该轮对话不会进入压缩摘要。与独立模型开关互不影响。',
+    thresholdSection: '压缩阈值',
+    thresholdLabel: '触发阈值（万 token）',
+    thresholdHint: '上下文达到该 token 数即触发压缩，可选 1-100（即 1万-100万 token）。填 0 表示跟随默认策略。',
   },
   en: {
     title: 'Context Distiller',
@@ -67,6 +70,9 @@ const TXT = {
     filterSection: 'Compaction filter',
     filterToggle: 'Filter out conversations reported as problematic during compaction',
     filterHint: 'After you report an answer via the "report problem" action (/feedback), that whole turn is kept out of the compaction summary. Independent of the dedicated-model toggle.',
+    thresholdSection: 'Compaction threshold',
+    thresholdLabel: 'Trigger threshold (10k tokens)',
+    thresholdHint: 'Compact once the context reaches this many tokens; pick 1-100 (10k-1M tokens). 0 keeps the default policy.',
   },
 };
 
@@ -74,8 +80,12 @@ const TXT = {
 interface ConfigSnapshot {
   compact: { enabled: boolean; provider: string; model: string };
   filter: { flaggedTurns: boolean };
+  threshold: { wan: number };
   engine: { enabled: boolean; thresholdRatio: number; retainRatio: number };
 }
+
+/** Upper bound of threshold.wan: 100 wan = 1,000,000 tokens. */
+const WAN_MAX = 100;
 
 /** Provider/model directory entry from GET /context-distiller/models. */
 interface ProviderEntry {
@@ -113,6 +123,7 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
   const [filterFlagged, setFilterFlagged] = useState(false);
+  const [wan, setWan] = useState(0);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -128,6 +139,7 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
         setProvider(cfg.compact.provider || '');
         setModel(cfg.compact.model || '');
         setFilterFlagged(cfg.filter?.flaggedTurns ?? false);
+        setWan(cfg.threshold?.wan ?? 0);
         setProviders(list || []);
         setLoaded(true);
       })
@@ -158,6 +170,9 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
           },
           filter: {
             flaggedTurns: filterFlagged,
+          },
+          threshold: {
+            wan: Math.min(WAN_MAX, Math.max(0, Math.round(wan) || 0)),
           },
         }),
       });
@@ -245,6 +260,22 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
         t('filterToggle')),
     ),
     React.createElement('div', { style: { ...S.hint, marginTop: '0' } }, t('filterHint')),
+    // Absolute-threshold section (independent of both toggles)
+    React.createElement('hr', { style: S.divider }),
+    React.createElement('h4', { style: S.sectionTitle }, t('thresholdSection')),
+    React.createElement('div', { style: S.row },
+      React.createElement('label', { style: S.label }, t('thresholdLabel')),
+      React.createElement('input', {
+        type: 'number',
+        style: S.select,
+        min: 0,
+        max: WAN_MAX,
+        step: 1,
+        value: wan,
+        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setWan(Number(e.target.value) || 0),
+      }),
+    ),
+    React.createElement('div', { style: { ...S.hint, marginTop: '0' } }, t('thresholdHint')),
     // Save
     React.createElement('button', {
       style: S.btn,

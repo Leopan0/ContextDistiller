@@ -95,6 +95,12 @@ config:
 |---|---|---|---|
 | `flaggedTurns` | boolean | `false` | Drop the whole conversation turn reported via the web feedback action / `/feedback` (`feedback/record`) from compaction summaries. |
 
+#### `threshold` — absolute compaction trigger
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `wan` | number | `0` | Compact once the measured context reaches this many 10k-token units (1-100 = 10k-1M tokens). `0` keeps the backend's default ratio policy. Clamped to the model window when larger. |
+
 #### `engine` — optional explicit-prompt backend
 
 | Field | Type | Default | Meaning |
@@ -107,7 +113,7 @@ config:
 
 ```bash
 curl http://localhost:<port>/context-distiller/health
-# {"status":"ok","router":{"enabled":true,...}}
+# {"status":"ok","compact":{"enabled":true,...}}
 
 curl http://localhost:<port>/context-distiller/models
 # [{"provider":"deepseek-official","models":[...]}, ...]
@@ -138,7 +144,8 @@ AGPL-3.0-or-later. Commercial licenses available on request.
 - **专用模型路由** — 拦截 `purpose: 'compaction'` 的 LLM 调用，改道到你配置
   的 provider/model。对会话调用零影响。
 - **设置面板** — 在 DSH 网页设置中提供浏览器端 UI。开关切换、下拉选择
-  provider 和 model（列表来自 `ctx.llm`）。保存即时生效，无需重启。
+  provider 和 model（列表来自 `ctx.llm`），并可设置压缩触发阈值
+  （1万-100万 token，填 0 跟随默认）。保存即时生效，无需重启。
 - **问题回答过滤** — 开启后，你在会话中点"有问题"反馈（网页反馈按钮或
   `/feedback`）的那一整轮对话，会在压缩时从摘要输入中剔除，错误回答不会
   进入 checkpoint 摘要。对 stock 压缩后端同样生效，与独立模型开关互不影响。
@@ -222,7 +229,7 @@ config:
 
 ```bash
 curl http://localhost:<port>/context-distiller/health
-# {"status":"ok","router":{"enabled":true,...}}
+# {"status":"ok","compact":{"enabled":true,...}}
 
 curl http://localhost:<port>/context-distiller/models
 # [{"provider":"deepseek-official","models":[...]}, ...]

@@ -17,9 +17,9 @@ import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compa
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { ContentBlock, Message, TokenUsage, ToolSchema } from '@deepseek-ai/dsh-llm';
 import { dsh, llm } from './dsh.js';
-import { PLUGIN_NAME } from './config.js';
+import { PLUGIN_NAME, engineRatioPolicy, type ResolvedPluginConfig } from './config.js';
 import { compactRoute } from './compact-router.js';
-import type { ResolvedEngineConfig, ResolvedPluginConfig } from './config.js';
+import { thresholdAdjustedConfig } from './threshold.js';
 
 /** Structural mirror of the base hook's input type. */
 interface CompressInput {
@@ -87,7 +87,7 @@ let CompressEngineClass:
       config: BasicCompactionConfig | undefined,
       compressPrompt: string,
       auxRoute: () => { provider: string; model: string } | undefined,
-      getEngineConfig: () => ResolvedEngineConfig
+      getConfig: () => ResolvedPluginConfig
     ) => CompressEngine)
   | undefined;
 
@@ -103,47 +103,45 @@ function compressEngineClass(): NonNullable<typeof CompressEngineClass> {
   class CompressEngineImpl extends Base {
     private readonly compressPrompt: string;
     private readonly auxRoute: () => { provider: string; model: string } | undefined;
-    private readonly getEngineConfig: () => ResolvedEngineConfig;
+    private readonly getConfig: () => ResolvedPluginConfig;
 
     constructor(
       ctx: Context,
       config: BasicCompactionConfig | undefined,
       compressPrompt: string,
       auxRoute: () => { provider: string; model: string } | undefined,
-      getEngineConfig: () => ResolvedEngineConfig
+      getConfig: () => ResolvedPluginConfig
     ) {
       super(ctx, config);
       this.compressPrompt = compressPrompt;
       this.auxRoute = auxRoute;
-      this.getEngineConfig = getEngineConfig;
+      this.getConfig = getConfig;
     }
 
     /**
      * Refresh the pressure policy right before a check so config edits to the
-     * threshold apply without rebuilding the engine.
+     * threshold apply without rebuilding the engine. When the absolute wan
+     * threshold is set it is converted for the routed model on every check;
+     * otherwise the engine's own ratio policy applies unchanged.
      */
-    private syncEngineConfig(): void {
-      const engine = this.getEngineConfig();
-      const next: ResolvedConfig = {
-        thresholdRatio: engine.thresholdRatio,
-        retainRatio: engine.retainRatio,
-        maxTokens: engine.maxTokens,
-        compactionRetries: engine.compactionRetries,
-        maxOverflowRetries: engine.maxOverflowRetries,
+    private async syncEngineConfig(agent: Agent): Promise<void> {
+      const resolved = this.getConfig();
+      const base: ResolvedConfig = {
+        ...engineRatioPolicy(resolved.engine),
         summarizationProvider: '',
         summarizationModel: '',
-        modelPolicies: [],
-        auto: engine.auto
+        modelPolicies: []
       };
-      (this as unknown as { config: ResolvedConfig }).config = next;
+      // No-op while threshold.wan is 0; otherwise converts for the routed model.
+      this.config = await thresholdAdjustedConfig(this.ctx, agent, resolved.threshold.wan, base);
     }
 
-    compactIfNeeded(
+    async compactIfNeeded(
       agent: Agent,
       trigger: CompactionTrigger,
       signal: AbortSignal
     ): Promise<CompactionResult | null> {
-      this.syncEngineConfig();
+      await this.syncEngineConfig(agent);
       return super.compactIfNeeded(agent, trigger, signal);
     }
 
@@ -231,16 +229,9 @@ export function installCompressionEngine(
   const engine = get().engine;
   return new (compressEngineClass())(
     ctx,
-    {
-      thresholdRatio: engine.thresholdRatio,
-      retainRatio: engine.retainRatio,
-      maxTokens: engine.maxTokens,
-      compactionRetries: engine.compactionRetries,
-      maxOverflowRetries: engine.maxOverflowRetries,
-      auto: engine.auto
-    },
+    engineRatioPolicy(engine),
     engine.compressPrompt,
     () => compactRoute(get),
-    () => get().engine
+    get
   );
 }

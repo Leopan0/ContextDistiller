@@ -11,6 +11,9 @@
  *      `BasicCompactionEngine` subclass driven by an explicit compression
  *      prompt. Requires @dsh-plugin/dsh-loader and is mutually exclusive with
  *      dsh-compaction-basic.
+ *   3. Absolute threshold (optional): `threshold.wan` overrides any stock
+ *      compaction backend in place so compaction triggers at a fixed token
+ *      budget (in 10k-token units) instead of a window ratio. 0 = untouched.
  *
  * A `GET /context-distiller/health` route is provided as a load smoke test.
  *
@@ -30,10 +33,12 @@ import {
 import { installCompactRouter } from './compact-router.js';
 import { type CompressEngine, installCompressionEngine } from './compress-engine.js';
 import { clearDshFacade, setDshFacade, type DshFacade } from './dsh.js';
+import { installThresholdPatch } from './threshold-patch.js';
 
 export { Config, PLUGIN_NAME, resolvePluginConfig } from './config.js';
 export { installCompactRouter, compactRoute } from './compact-router.js';
 export { installCompressionEngine, type CompressEngine } from './compress-engine.js';
+export { installThresholdPatch } from './threshold-patch.js';
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = PLUGIN_NAME;
@@ -63,6 +68,36 @@ function readBody(req: { on: (ev: string, cb: (chunk?: Buffer) => void) => void 
   });
 }
 
+/** Minimal structural shape of the node:http responses written below. */
+interface JsonResponse {
+  writeHead: (status: number, headers: Record<string, string>) => unknown;
+  end: (body?: string) => unknown;
+}
+
+/** Send any value as a JSON response body. */
+function json(res: JsonResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+/** Policy snapshot shared verbatim by the health and config GET routes. */
+function policyView(r: ResolvedPluginConfig) {
+  return {
+    compact: {
+      enabled: r.compact.enabled,
+      provider: r.compact.provider,
+      model: r.compact.model
+    },
+    filter: { flaggedTurns: r.filter.flaggedTurns },
+    threshold: { wan: r.threshold.wan },
+    engine: {
+      enabled: r.engine.enabled,
+      thresholdRatio: r.engine.thresholdRatio,
+      retainRatio: r.engine.retainRatio
+    }
+  };
+}
+
 /** Cordis plugin entry. */
 export function apply(ctx: Context, config: PluginConfig): void {
   // Runtime override set by the settings panel (POST /config). Merged on top
@@ -77,6 +112,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
     const raw: PluginConfig = { ...config, ...runtimeOverride,
       compact: { ...config.compact, ...runtimeOverride?.compact },
       filter: { ...config.filter, ...runtimeOverride?.filter },
+      threshold: { ...config.threshold, ...runtimeOverride?.threshold },
       engine: { ...config.engine, ...runtimeOverride?.engine },
     };
     if (raw === lastRaw && lastGood !== undefined) return lastGood;
@@ -106,28 +142,12 @@ export function apply(ctx: Context, config: PluginConfig): void {
     kind: 'exact',
     path: `/${PLUGIN_NAME}/health`,
     handler: (_req, res) => {
-      const r = resolved();
-      const body = JSON.stringify({
+      json(res, 200, {
         status: 'ok',
         plugin: PLUGIN_NAME,
-        router: {
-          enabled: r.compact.enabled,
-          configured: r.compact.provider.length > 0 && r.compact.model.length > 0,
-          provider: r.compact.provider || null,
-          model: r.compact.model || null
-        },
-        filter: {
-          flaggedTurns: r.filter.flaggedTurns
-        },
-        engine: {
-          enabled: r.engine.enabled,
-          thresholdRatio: r.engine.thresholdRatio,
-          retainRatio: r.engine.retainRatio
-        },
+        ...policyView(resolved()),
         uptime: process.uptime()
       });
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(body);
     }
   });
 
@@ -138,14 +158,7 @@ export function apply(ctx: Context, config: PluginConfig): void {
     path: `/${PLUGIN_NAME}/config`,
     handler: async (req, res) => {
       if (req.method === 'GET') {
-        const r = resolved();
-        const body = JSON.stringify({
-          compact: { enabled: r.compact.enabled, provider: r.compact.provider, model: r.compact.model },
-          filter: { flaggedTurns: r.filter.flaggedTurns },
-          engine: { enabled: r.engine.enabled, thresholdRatio: r.engine.thresholdRatio, retainRatio: r.engine.retainRatio }
-        });
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(body);
+        json(res, 200, policyView(resolved()));
         return;
       }
       if (req.method === 'POST') {
@@ -162,26 +175,27 @@ export function apply(ctx: Context, config: PluginConfig): void {
             filter: {
               flaggedTurns: body.filter?.flaggedTurns ?? cur.filter.flaggedTurns,
             },
+            threshold: {
+              wan: body.threshold?.wan ?? cur.threshold.wan,
+            },
           };
           lastRaw = undefined; // force re-resolve
           const r = resolved();
           ctx.logger.info(
             `context-distiller config updated (router: ${r.compact.enabled ? 'on' : 'off'}, ` +
             `provider: ${r.compact.provider}, model: ${r.compact.model}; ` +
-            `flagged-turn filter: ${r.filter.flaggedTurns ? 'on' : 'off'})`
+            `flagged-turn filter: ${r.filter.flaggedTurns ? 'on' : 'off'}; ` +
+            `threshold: ${r.threshold.wan}wan)`
           );
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, compact: r.compact, filter: r.filter }));
+          json(res, 200, { ok: true, compact: r.compact, filter: r.filter, threshold: r.threshold });
         } catch (error) {
           ctx.logger.error('context-distiller: config update failed');
           ctx.logger.error(error);
-          res.writeHead(400, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: (error as Error).message }));
+          json(res, 400, { ok: false, error: (error as Error).message });
         }
         return;
       }
-      res.writeHead(405, { 'content-type': 'application/json' });
-      res.end('{"error":"method not allowed"}');
+      json(res, 405, { error: 'method not allowed' });
     }
   });
 
@@ -210,27 +224,27 @@ export function apply(ctx: Context, config: PluginConfig): void {
             result.push({ provider: p.id, name: p.name, models: [] });
           }
         }
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(result));
+        json(res, 200, result);
       } catch (error) {
-        res.writeHead(500, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: (error as Error).message }));
+        json(res, 500, { error: (error as Error).message });
       }
     }
   });
 
   // Lifecycle cleanup.
   let compressionEngine: CompressEngine | undefined;
+  let disposeThreshold: (() => void) | undefined;
   ctx.effect(
     () => () => {
       disposeRouter?.();
       disposeHealth?.();
       disposeConfig?.();
       disposeModels?.();
+      disposeThreshold?.();
       compressionEngine = undefined;
       clearDshFacade();
     },
-    'context-distiller: router, health/config/models routes, and engine lifecycle'
+    'context-distiller: router, health/config/models routes, threshold patch, and engine lifecycle'
   );
 
   // 3) Optional explicit-prompt compression engine.
@@ -257,10 +271,26 @@ export function apply(ctx: Context, config: PluginConfig): void {
     }
   }
 
+  // 4) Absolute-threshold patch for a stock (foreign) compaction backend.
+  //    Skipped when our own engine owns ctx.compaction — it applies the wan
+  //    threshold internally via syncEngineConfig. If engine.enabled was set
+  //    but its install failed/skipped, the stock backend (if any) gets the
+  //    patch instead.
+  if (compressionEngine === undefined) {
+    try {
+      disposeThreshold = installThresholdPatch(ctx, resolved);
+    } catch (error) {
+      ctx.logger.warn(
+        'context-distiller: compaction threshold patch failed; the stock backend keeps its ratio policy.'
+      );
+      ctx.logger.warn(error);
+    }
+  }
+
+  const final = resolved();
   ctx.logger.info(
-    `context-distiller loaded (router: ${resolved().compact.enabled ? 'on' : 'off'}, ` +
-    `flagged-turn filter: ${resolved().filter.flaggedTurns ? 'on' : 'off'}, engine: ${
-      resolved().engine.enabled ? 'on' : 'off'
-    })`
+    `context-distiller loaded (router: ${final.compact.enabled ? 'on' : 'off'}, ` +
+    `flagged-turn filter: ${final.filter.flaggedTurns ? 'on' : 'off'}, ` +
+    `engine: ${final.engine.enabled ? 'on' : 'off'}, threshold: ${final.threshold.wan}wan)`
   );
 }

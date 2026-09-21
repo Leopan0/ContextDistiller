@@ -14,7 +14,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction';
 import type { Agent } from '@deepseek-ai/dsh-agent';
-import type { ResolvedPluginConfig } from './config.js';
+import { type ResolvedPluginConfig } from './config.js';
 /**
  * Instance surface of the compression engine.
  *

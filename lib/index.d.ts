@@ -11,6 +11,9 @@
  *      `BasicCompactionEngine` subclass driven by an explicit compression
  *      prompt. Requires @dsh-plugin/dsh-loader and is mutually exclusive with
  *      dsh-compaction-basic.
+ *   3. Absolute threshold (optional): `threshold.wan` overrides any stock
+ *      compaction backend in place so compaction triggers at a fixed token
+ *      budget (in 10k-token units) instead of a window ratio. 0 = untouched.
  *
  * A `GET /context-distiller/health` route is provided as a load smoke test.
  *
@@ -21,6 +24,7 @@ import { type PluginConfig } from './config.js';
 export { Config, PLUGIN_NAME, resolvePluginConfig } from './config.js';
 export { installCompactRouter, compactRoute } from './compact-router.js';
 export { installCompressionEngine, type CompressEngine } from './compress-engine.js';
+export { installThresholdPatch } from './threshold-patch.js';
 /** Cordis plugin name used by loader diagnostics. */
 export declare const name = "context-distiller";
 /**

@@ -39,6 +39,11 @@ declare const Config: z<Schemastery.ObjectS<{
     }>, Schemastery.ObjectT<{
         flaggedTurns: z<boolean, boolean>;
     }>>;
+    threshold: z<Schemastery.ObjectS<{
+        wan: z<number, number>;
+    }>, Schemastery.ObjectT<{
+        wan: z<number, number>;
+    }>>;
     engine: z<Schemastery.ObjectS<{
         enabled: z<boolean, boolean>;
         thresholdRatio: z<number, number>;
@@ -73,6 +78,11 @@ declare const Config: z<Schemastery.ObjectS<{
     }>, Schemastery.ObjectT<{
         flaggedTurns: z<boolean, boolean>;
     }>>;
+    threshold: z<Schemastery.ObjectS<{
+        wan: z<number, number>;
+    }>, Schemastery.ObjectT<{
+        wan: z<number, number>;
+    }>>;
     engine: z<Schemastery.ObjectS<{
         enabled: z<boolean, boolean>;
         thresholdRatio: z<number, number>;
@@ -105,6 +115,10 @@ export interface ResolvedCompactConfig {
 export interface ResolvedFilterConfig {
     readonly flaggedTurns: boolean;
 }
+/** Resolved absolute-threshold policy (units of 10k tokens; 0 = untouched). */
+export interface ResolvedThresholdConfig {
+    readonly wan: number;
+}
 /** Resolved compression-engine policy. */
 export interface ResolvedEngineConfig {
     readonly enabled: boolean;
@@ -120,8 +134,20 @@ export interface ResolvedEngineConfig {
 export interface ResolvedPluginConfig {
     readonly compact: ResolvedCompactConfig;
     readonly filter: ResolvedFilterConfig;
+    readonly threshold: ResolvedThresholdConfig;
     readonly engine: ResolvedEngineConfig;
 }
+/** Ratio-policy fields shared verbatim by the engine constructor config and the per-check refresh. */
+export interface EngineRatioPolicy {
+    readonly thresholdRatio: number;
+    readonly retainRatio: number;
+    readonly maxTokens: number;
+    readonly compactionRetries: number;
+    readonly maxOverflowRetries: number;
+    readonly auto: boolean;
+}
+/** Map the resolved engine policy onto the backend's config vocabulary. */
+export declare function engineRatioPolicy(engine: ResolvedEngineConfig): EngineRatioPolicy;
 /**
  * Resolve and validate one untrusted config snapshot into the frozen runtime
  * shape. Throws on mutually-inconsistent values so a bad config fails loudly.
