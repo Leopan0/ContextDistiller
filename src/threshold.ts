@@ -120,11 +120,21 @@ export async function thresholdAdjustedConfig(
           'compaction will only trigger at a full window'
       );
     }
+    // dsh 0.1.7 ResolvedRetention is an exclusive union: the patched config
+    // must carry retainTokens alone, so the original's retainRatio form is
+    // deliberately not spread through.
     return {
-      ...original,
       thresholdRatio: plan.thresholdRatio,
-      retainTokens: plan.retainTokens
-    } as ResolvedConfig;
+      retainTokens: plan.retainTokens,
+      headroomTokens: original.headroomTokens,
+      summarizationProvider: original.summarizationProvider,
+      summarizationModel: original.summarizationModel,
+      maxTokens: original.maxTokens,
+      compactionRetries: original.compactionRetries,
+      maxOverflowRetries: original.maxOverflowRetries,
+      modelPolicies: original.modelPolicies,
+      auto: original.auto
+    };
   } catch (error) {
     warnOnce(
       ctx,

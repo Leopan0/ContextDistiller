@@ -9,7 +9,7 @@
  *
  * @module context-distiller/config
  */
-import z from 'schemastery';
+import z from '@deepseek-ai/schemastery';
 import { deepFreeze } from './dsh.js';
 
 /**
@@ -20,6 +20,9 @@ export const PLUGIN_NAME = 'context-distiller';
 
 /** Default ceiling for one compression (summary) completion, in tokens. */
 export const DEFAULT_ENGINE_MAX_TOKENS = 8192;
+
+/** Default pressure headroom the backend reserves beyond the output budget. */
+export const DEFAULT_ENGINE_HEADROOM_TOKENS = 65_536;
 
 /**
  * The default context-compression instruction used by the optional engine.
@@ -42,7 +45,14 @@ export const DEFAULT_COMPRESS_PROMPT = [
   'Rules: preserve exact paths, commands, identifiers, numbers, and syntax fragments; capture user corrections faithfully; do not mention this compression request; output only the checkpoint text.'
 ].join('\n');
 
-/** Plugin entry / config schema. Defaults live here so config blocks can omit them. */
+/** Plugin entry / config schema. Defaults live here so config blocks can omit them.
+ *
+ * Every section is declared `.volatile()`: the 0.1.7 settings architecture
+ * projects volatile fields into the Plugin Manager / web settings forms, and a
+ * volatile-only edit keeps the running plugin instance alive. The instance
+ * reads current values lazily through the delivered refs (see `apply`), so a
+ * form edit applies immediately and persists through the profile patch.
+ */
 const Config = z.object({
   compact: z.object({
     enabled: z
@@ -57,23 +67,25 @@ const Config = z.object({
     model: z
       .string()
       .description('The provider-owned model id used for compaction summaries.')
-  }),
+  }).default({ enabled: false, provider: '', model: '' }).volatile(),
   filter: z.object({
     flaggedTurns: z
       .boolean()
       .default(false)
       .description(
-        'During compaction, drop every message of conversation turns the user flagged with feedback/record (the web "report a problem" / /feedback action) so flagged exchanges never enter the checkpoint summary. Independent of the dedicated-model router.'
+        'During compaction, drop every message of the conversation turn containing an answer the user rated negative (the message thumbs-down / feedback/message-put event) so the flagged exchange never enters the checkpoint summary. Independent of the dedicated-model router.'
       )
-  }),
+  }).default({ flaggedTurns: false }).volatile(),
   threshold: z.object({
     wan: z.number().step(1).min(0).max(100).default(0).description(
       'Absolute compaction trigger in 10k-token units (wan), converted per routed model at check time. ' +
       '0 (default) keeps the compaction backend ratio policy untouched; 1-100 spans 10k-1M tokens, ' +
       'e.g. 8 compacts once measured context reaches 80000 tokens. Clamped to the model window when ' +
-      'larger. A backend modelPolicies entry with its own thresholdRatio still takes precedence.'
+      'larger. The backend additionally caps pressure below its reserved output budget and ' +
+      'headroomTokens, so the effective trigger can land earlier than this value. A backend ' +
+      'modelPolicies entry with its own thresholdRatio still takes precedence.'
     )
-  }),
+  }).default({ wan: 0 }).volatile(),
   engine: z.object({
     enabled: z
       .boolean()
@@ -85,6 +97,10 @@ const Config = z.object({
       .description('Compact when context pressure reaches this fraction of the window.'),
     retainRatio: z.number().step(0.01).min(0.01).max(0.99).default(0.16)
       .description('Fraction of the window guaranteed to remain headroom after compaction.'),
+    headroomTokens: z.number().step(1).min(0).default(DEFAULT_ENGINE_HEADROOM_TOKENS)
+      .description(
+        'Additional pressure headroom (tokens) reserved beyond the routed output reservation; the backend caps the pressure threshold below window minus this budget.'
+      ),
     maxTokens: z.number().step(1).min(1).default(DEFAULT_ENGINE_MAX_TOKENS)
       .description('Maximum tokens for one compression completion.'),
     compactionRetries: z.number().step(1).min(0).default(1),
@@ -92,11 +108,28 @@ const Config = z.object({
     auto: z.boolean().default(true).description('Compact automatically on pressure, not only on manual /compact.'),
     compressPrompt: z.string().default(DEFAULT_COMPRESS_PROMPT)
       .description('The explicit instruction appended to the compression call.')
-  })
+  }).default({
+    enabled: false,
+    thresholdRatio: 0.8,
+    retainRatio: 0.16,
+    headroomTokens: DEFAULT_ENGINE_HEADROOM_TOKENS,
+    maxTokens: DEFAULT_ENGINE_MAX_TOKENS,
+    compactionRetries: 1,
+    maxOverflowRetries: 1,
+    auto: true,
+    compressPrompt: DEFAULT_COMPRESS_PROMPT
+  }).volatile()
 });
 
-/** Inferred plugin configuration value. */
+/** Inferred plugin configuration value: sections declared `.volatile()` are
+ * delivered to `apply` as loader refs carrying the live value behind `.get()`. */
 export type PluginConfig = typeof Config extends z<infer T> ? T : never;
+
+/** Unwrap one `.volatile()` section ref to its plain snapshot value. */
+type UnwrapSection<S> = S extends { get(): infer V } ? V : S;
+
+/** Plain (ref-unwrapped) config sections accepted by resolvePluginConfig. */
+export type PluginConfigInput = { [K in keyof PluginConfig]: UnwrapSection<PluginConfig[K]> };
 
 /** Resolved compaction-routing policy (the dedicated summarizer route). */
 export interface ResolvedCompactConfig {
@@ -120,6 +153,7 @@ export interface ResolvedEngineConfig {
   readonly enabled: boolean;
   readonly thresholdRatio: number;
   readonly retainRatio: number;
+  readonly headroomTokens: number;
   readonly maxTokens: number;
   readonly compactionRetries: number;
   readonly maxOverflowRetries: number;
@@ -139,6 +173,7 @@ export interface ResolvedPluginConfig {
 export interface EngineRatioPolicy {
   readonly thresholdRatio: number;
   readonly retainRatio: number;
+  readonly headroomTokens: number;
   readonly maxTokens: number;
   readonly compactionRetries: number;
   readonly maxOverflowRetries: number;
@@ -150,6 +185,7 @@ export function engineRatioPolicy(engine: ResolvedEngineConfig): EngineRatioPoli
   return {
     thresholdRatio: engine.thresholdRatio,
     retainRatio: engine.retainRatio,
+    headroomTokens: engine.headroomTokens,
     maxTokens: engine.maxTokens,
     compactionRetries: engine.compactionRetries,
     maxOverflowRetries: engine.maxOverflowRetries,
@@ -161,7 +197,7 @@ export function engineRatioPolicy(engine: ResolvedEngineConfig): EngineRatioPoli
  * Resolve and validate one untrusted config snapshot into the frozen runtime
  * shape. Throws on mutually-inconsistent values so a bad config fails loudly.
  */
-export function resolvePluginConfig(config: PluginConfig): ResolvedPluginConfig {
+export function resolvePluginConfig(config: PluginConfigInput): ResolvedPluginConfig {
   const compact = config?.compact ?? {};
   const filter = config?.filter ?? {};
   const threshold = config?.threshold ?? {};
@@ -186,6 +222,11 @@ export function resolvePluginConfig(config: PluginConfig): ResolvedPluginConfig 
     throw new Error('context-distiller: engine.retainRatio must be less than engine.thresholdRatio');
   }
 
+  const headroomTokens = engine.headroomTokens ?? DEFAULT_ENGINE_HEADROOM_TOKENS;
+  if (!Number.isInteger(headroomTokens) || headroomTokens < 0) {
+    throw new Error('context-distiller: engine.headroomTokens must be a non-negative integer');
+  }
+
   const compressPrompt =
     typeof engine.compressPrompt === 'string' && engine.compressPrompt.length > 0
       ? engine.compressPrompt
@@ -207,6 +248,7 @@ export function resolvePluginConfig(config: PluginConfig): ResolvedPluginConfig 
       enabled: engine.enabled ?? false,
       thresholdRatio,
       retainRatio,
+      headroomTokens,
       maxTokens: engine.maxTokens ?? DEFAULT_ENGINE_MAX_TOKENS,
       compactionRetries: engine.compactionRetries ?? 1,
       maxOverflowRetries: engine.maxOverflowRetries ?? 1,

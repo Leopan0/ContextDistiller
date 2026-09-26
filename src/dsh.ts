@@ -35,7 +35,6 @@ export interface DshSymbols {
 /** The subset of dshloader's `llm` helper facade this plugin uses. */
 export interface LlmHelpers {
   createUserMessage: typeof DshLlm.createUserMessage;
-  deepFreeze: typeof DshLlm.deepFreeze;
 }
 
 /** Shape of `ctx.dshLoader` relied upon here. */
@@ -72,7 +71,7 @@ export function llm(): LlmHelpers {
   return facade.llm;
 }
 
-/** Local recursive freeze, used as a fallback when the facade is unavailable. */
+/** Local recursive freeze, used unconditionally. */
 function localDeepFreeze<T>(value: T): T {
   if (value === null || typeof value !== 'object') return value;
   if (Object.isFrozen(value)) return value;
@@ -84,11 +83,11 @@ function localDeepFreeze<T>(value: T): T {
 }
 
 /**
- * Recursively freeze a value. Uses dsh's own `deepFreeze` when the facade is
- * present (identical runtime semantics), otherwise a local equivalent — so the
- * pure model-router path keeps working even without dsh-loader installed.
+ * Recursively freeze a value with the plugin's own traversal. dsh-llm no
+ * longer exports its `deepFreeze` helper (removed in 0.1.7), and the loader
+ * facade degrades to a shallow top-level freeze, so identical runtime
+ * semantics are guaranteed here instead.
  */
 export function deepFreeze<T>(value: T): T {
-  if (facade !== undefined) return facade.llm.deepFreeze(value);
   return localDeepFreeze(value);
 }

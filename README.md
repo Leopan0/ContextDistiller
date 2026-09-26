@@ -9,21 +9,26 @@
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that
 runs **context compaction with a dedicated model**, separate from the
 conversation model. Point the summarization step at a cheaper or faster model
-while your chat model stays untouched — all configurable from the web UI.
+while your chat model stays untouched — all configurable from the Plugin
+Manager.
+
+Requires DSH **0.1.7-rc.2 or later** (the Desktop app and `dsh web` both work).
 
 ### Features
 
 - **Dedicated-model router** — Intercepts `purpose: 'compaction'` LLM calls and
   reroutes them to a provider/model of your choice. Zero impact on conversation
   calls.
-- **Settings panel** — A browser-side UI in DSH web settings. Toggle the
-  dedicated model on/off, pick provider & model from dropdowns populated by
-  `ctx.llm`. Changes take effect immediately, no restart needed.
-- **Flagged-answer filter** — When enabled, every conversation turn you report
-  as problematic (the web feedback action or `/feedback`) is dropped from the
-  compaction input, so a bad answer never enters the checkpoint summary. Works
-  with the stock compaction backend and is independent of the dedicated-model
-  toggle.
+- **Native config form** — Configuration lives in the DSH Plugin Manager:
+  every config section is declared volatile, so the management page renders an
+  editable form whose changes apply to the running plugin without a reload and
+  persist through the active profile's patch (survive restarts). A
+  `cordis.patch.yml` config block works identically.
+- **Flagged-answer filter** — When enabled, the whole conversation turn
+  containing an answer you thumbs-down (`feedback/message-put`, negative
+  rating) is dropped from the compaction input, so a bad exchange never enters
+  the checkpoint summary. Works with the stock compaction backend and is
+  independent of the dedicated-model toggle.
 - **Bilingual** — UI text follows the DSH interface locale (Chinese / English).
 - **Optional explicit-prompt engine** — A `BasicCompactionEngine` subclass with
   a structured checkpoint prompt. Requires `@dsh-plugin/dsh-loader`.
@@ -50,6 +55,11 @@ Session model ──────────────────────
 
 ### Install
 
+**Desktop app**: open the Plugins page → install from GitHub with
+`github:Leopan0/ContextDistiller`.
+
+**Web (`dsh web`)**:
+
 ```bash
 # From local directory (development)
 dsh plugin --profile web add file:/path/to/context-distiller
@@ -62,8 +72,11 @@ Restart `dsh web` after installing.
 
 ### Configure
 
-Open the DSH web settings page → find "Context Distiller" (or "上下文压缩") →
-toggle on → select provider and model → Save.
+Open the DSH Plugin Manager (插件 page) → find "Context Distiller" (or
+"上下文压缩") → open its configuration → toggle the dedicated model on, fill in
+`provider` / `model`, set `filter` / `threshold` / `engine` as needed. Volatile
+fields apply to the running plugin immediately and persist through the active
+profile's patch.
 
 Or via YAML in `cordis.patch.yml`:
 
@@ -93,13 +106,13 @@ config:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `flaggedTurns` | boolean | `false` | Drop the whole conversation turn reported via the web feedback action / `/feedback` (`feedback/record`) from compaction summaries. |
+| `flaggedTurns` | boolean | `false` | Drop the whole conversation turn containing an answer the user thumbs-downed (`feedback/message-put` with a negative rating) from compaction summaries. |
 
 #### `threshold` — absolute compaction trigger
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `wan` | number | `0` | Compact once the measured context reaches this many 10k-token units (1-100 = 10k-1M tokens). `0` keeps the backend's default ratio policy. Clamped to the model window when larger. |
+| `wan` | number | `0` | Compact once the measured context reaches this many 10k-token units (1-100 = 10k-1M tokens). `0` keeps the backend's default ratio policy. Clamped to the model window when larger. The backend additionally caps pressure below its reserved output budget plus `headroomTokens`, so the effective trigger can land earlier than this value. |
 
 #### `engine` — optional explicit-prompt backend
 
@@ -108,15 +121,13 @@ config:
 | `enabled` | boolean | `false` | Install the explicit-prompt engine. |
 | `thresholdRatio` | number | `0.8` | Compact at this context-window pressure. |
 | `retainRatio` | number | `0.16` | Headroom kept free after compaction. |
+| `headroomTokens` | number | `65536` | Additional pressure headroom (tokens) reserved beyond the routed output reservation; the backend caps the pressure threshold below window minus this budget. |
 
 ### Verify
 
 ```bash
 curl http://localhost:<port>/context-distiller/health
 # {"status":"ok","compact":{"enabled":true,...}}
-
-curl http://localhost:<port>/context-distiller/models
-# [{"provider":"deepseek-official","models":[...]}, ...]
 ```
 
 ### Develop
@@ -137,18 +148,22 @@ AGPL-3.0-or-later. Commercial licenses available on request.
 
 一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件，
 用**独立模型做上下文压缩**，与会话模型完全分离。把摘要/压缩步骤指向更
-便宜或更快的模型，聊天模型不受影响——所有配置在网页 UI 完成。
+便宜或更快的模型，聊天模型不受影响——所有配置在插件管理页完成。
+
+要求 DSH **0.1.7-rc.2 或更高版本**（桌面版与 `dsh web` 均可）。
 
 ### 功能
 
 - **专用模型路由** — 拦截 `purpose: 'compaction'` 的 LLM 调用，改道到你配置
   的 provider/model。对会话调用零影响。
-- **设置面板** — 在 DSH 网页设置中提供浏览器端 UI。开关切换、下拉选择
-  provider 和 model（列表来自 `ctx.llm`），并可设置压缩触发阈值
-  （1万-100万 token，填 0 跟随默认）。保存即时生效，无需重启。
-- **问题回答过滤** — 开启后，你在会话中点"有问题"反馈（网页反馈按钮或
-  `/feedback`）的那一整轮对话，会在压缩时从摘要输入中剔除，错误回答不会
-  进入 checkpoint 摘要。对 stock 压缩后端同样生效，与独立模型开关互不影响。
+- **原生配置表单** — 配置入口在 DSH 插件管理页：所有配置节均声明为
+  volatile，管理页会渲染出可编辑表单，修改即时对运行中的插件生效，并随
+  当前 Profile 的 patch 持久保存（重启不丢）。`cordis.patch.yml` 的 config
+  块写法完全等效。
+- **点踩回答过滤** — 开启后，你点踩（差评，`feedback/message-put` 负面
+  评分）的那条回答所在的整轮对话，会在压缩时从摘要输入中剔除，错误回答
+  不会进入 checkpoint 摘要。对 stock 压缩后端同样生效，与独立模型开关
+  互不影响。
 - **中英双语** — UI 文案跟随 DSH 界面语言自动切换。
 - **可选显式 prompt 压缩引擎** — `BasicCompactionEngine` 子类，使用结构化
   checkpoint prompt。需要 `@dsh-plugin/dsh-loader`。
@@ -173,6 +188,10 @@ AGPL-3.0-or-later. Commercial licenses available on request.
 
 ### 安装
 
+**桌面版**：打开插件管理页 → 从 GitHub 安装 `github:Leopan0/ContextDistiller`。
+
+**Web（`dsh web`）**：
+
 ```bash
 # 本地目录（开发）
 dsh plugin --profile web add file:/path/to/context-distiller
@@ -185,7 +204,10 @@ dsh plugin --profile web add "github:Leopan0/ContextDistiller#main"
 
 ### 配置
 
-打开 DSH 网页设置 → 找到"上下文压缩" → 开启 → 选择提供商和模型 → 保存。
+打开 DSH 插件管理页（插件页）→ 找到"上下文压缩"（Context Distiller）→
+打开它的配置 → 开启独立模型路由，填写 `provider` / `model`，按需设置
+`filter` / `threshold` / `engine`。volatile 字段的修改即时对运行中的插件
+生效，并随当前 Profile 的 patch 持久保存。
 
 或通过 YAML 配置 `cordis.patch.yml`：
 
@@ -215,7 +237,13 @@ config:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `flaggedTurns` | boolean | `false` | 压缩摘要时剔除整轮被网页反馈 / `/feedback`（`feedback/record` 事件）标记为有问题的对话。 |
+| `flaggedTurns` | boolean | `false` | 压缩摘要时剔除整轮包含被点踩回答（`feedback/message-put` 负面评分）的对话。 |
+
+#### `threshold` — 绝对压缩触发阈值
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `wan` | number | `0` | 上下文达到该 10k-token 单位数即触发压缩（1-100 = 1万-100万 token）。`0` 跟随后端默认比例策略，超出模型窗口时自动钳制。后端还会把压力封顶在"窗口 − 输出预算预留 − headroomTokens"以下，因此实际触发点可能早于该值。 |
 
 #### `engine` — 可选显式 prompt 后端
 
@@ -224,15 +252,13 @@ config:
 | `enabled` | boolean | `false` | 是否安装显式 prompt 引擎。 |
 | `thresholdRatio` | number | `0.8` | 上下文窗口压力达到此比例时触发压缩。 |
 | `retainRatio` | number | `0.16` | 压缩后保留的余量比例。 |
+| `headroomTokens` | number | `65536` | 在输出预算预留之外额外保留的压力余量（token）；后端把压力阈值封顶在窗口减去该预算以下。 |
 
 ### 验证
 
 ```bash
 curl http://localhost:<port>/context-distiller/health
 # {"status":"ok","compact":{"enabled":true,...}}
-
-curl http://localhost:<port>/context-distiller/models
-# [{"provider":"deepseek-official","models":[...]}, ...]
 ```
 
 ### 开发

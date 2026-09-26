@@ -8,13 +8,17 @@
 # profile's own cordis.patch.yml), so it is a bare `insert`. The id/name MUST
 # equal package.json#name.
 #
-# `compact.enabled` stays off by default. When the user enables the plugin
-# in the settings panel, they must pick a provider/model from the Harness
-# model list — there are no hardcoded defaults.
+# `compact.enabled` stays off by default. Enable it through the Plugin
+# Manager's config form for this plugin (or a config block here), picking a
+# provider/model from the Harness model list — there are no hardcoded defaults.
 #
-# `filter.flaggedTurns` also stays off by default: when on, conversation
-# turns the user reports via the web feedback action / /feedback
-# (`feedback/record` session events) are excluded from compaction summaries.
+# `filter.flaggedTurns` also stays off by default: when on, conversation turns
+# containing an answer the user rated negative (message thumbs-down, the
+# `feedback/message-put` session event) are excluded from compaction summaries.
+#
+# All sections are declared volatile in the config schema, so edits made in the
+# settings page apply to the running plugin without a reload and persist
+# through the active profile's patch.
 - insert:
     - id: context-distiller
       name: context-distiller

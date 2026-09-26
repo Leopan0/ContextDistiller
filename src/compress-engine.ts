@@ -17,13 +17,12 @@ import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compa
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { ContentBlock, Message, TokenUsage, ToolSchema } from '@deepseek-ai/dsh-llm';
 import { dsh, llm } from './dsh.js';
-import { PLUGIN_NAME, engineRatioPolicy, type ResolvedPluginConfig } from './config.js';
+import { engineRatioPolicy, type ResolvedPluginConfig } from './config.js';
 import { compactRoute } from './compact-router.js';
 import { thresholdAdjustedConfig } from './threshold.js';
 
 /** Structural mirror of the base hook's input type. */
 interface CompressInput {
-  readonly system?: string;
   readonly tools?: readonly ToolSchema[];
   readonly messages: readonly Message[];
 }
@@ -156,11 +155,13 @@ function compressEngineClass(): NonNullable<typeof CompressEngineClass> {
         return super.summarize(input, agent, signal);
       }
 
+      // dsh 0.1.7 folds the conversation's system head into `input.messages`
+      // as the leading system-role message, so it is replayed verbatim here.
       const messages = [
         ...input.messages,
         llm().createUserMessage({
           content: [{ type: 'text', text: this.compressPrompt }],
-          source: { kind: 'plugin', plugin: PLUGIN_NAME }
+          source: { kind: 'user' }
         })
       ];
 
@@ -169,7 +170,6 @@ function compressEngineClass(): NonNullable<typeof CompressEngineClass> {
         provider: route.provider,
         model: route.model,
         messages,
-        ...(input.system !== undefined ? { system: input.system } : {}),
         ...(input.tools !== undefined ? { tools: [...input.tools] } : {}),
         maxTokens: this.config.maxTokens,
         sessionId: agent.session.id,

@@ -22,6 +22,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type PluginConfig } from './config.js';
 export { Config, PLUGIN_NAME, resolvePluginConfig } from './config.js';
+export type { PluginConfig, PluginConfigInput } from './config.js';
 export { installCompactRouter, compactRoute } from './compact-router.js';
 export { installCompressionEngine, type CompressEngine } from './compress-engine.js';
 export { installThresholdPatch } from './threshold-patch.js';
@@ -32,8 +33,9 @@ export declare const name = "context-distiller";
  *
  * - `llm`: the model seam the waterfall listener hooks and streams through.
  * - `webServer`: hosts the `/context-distiller/health` smoke route.
- * - `sessions`: resolves the live session of a compaction call so flagged
- *   turns (`feedback/record`) can be filtered out of the summarization input.
+ * - `sessions`: resolves the live session of a compaction call so turns
+ *   flagged via negative message ratings (`feedback/message-put`) can be
+ *   filtered out of the summarization input.
  *
  * `dshLoader` is deliberately NOT required: the core router has no module-level
  * dsh dependency. It is probed optionally via `ctx.get` for the engine.

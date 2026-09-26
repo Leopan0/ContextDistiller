@@ -1,320 +1,360 @@
 /**
- * context-distiller client half — browser-side settings panel.
+ * context-distiller client half — the plugin's configuration card on the
+ * Plugins management page.
  *
- * Registers a "Context Distiller" section in the DSH web settings page via
- * `ctx.slots.inject('settings.section', ...)`. The panel lets the user toggle
- * the dedicated-model compaction router and pick a provider/model pair from
- * dropdowns populated by `GET /context-distiller/models` (backed by ctx.llm).
- * Changes are persisted through `POST /context-distiller/config`, taking
- * effect immediately without a restart.
+ * Since DSH 0.1.7 the Plugins page renders an installed bundle's configuration
+ * from the `plugins.bundle.config` slot, keyed by the bundle's package name.
+ * This card binds the Host settings namespace `context-distiller` through the
+ * shared `configForms` service: values read live from the namespace snapshot,
+ * edits staged locally, and a save issues one revision-fenced `mutate` that
+ * the Host validates and persists through the active profile's patch. The
+ * legacy browser-side settings panel and its `POST /config` runtime override
+ * were removed in 0.2.0 — this page is the single configuration surface.
  *
- * UI text follows the DSH interface locale via `ctx.locale.register/bind`.
+ * React / react-dom stay external (platform-provided); no other client
+ * packages are imported, so the bundle carries no host values. The file stays
+ * `.ts` with `React.createElement` calls: the build pipeline (and the
+ * packaging gate) treat this entry as plain TypeScript.
  *
  * @module context-distiller/client
  */
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect, useSyncExternalStore } from 'react';
 
-/** Client half inject: `slots` for settings panel, `locale` for i18n. */
-export const inject = ['slots', 'locale'];
+/** Client services: the shared configuration-forms facade over Host settings. */
+export const inject = [];
 
-/** i18n namespace. */
-const NS = 'context-distiller';
+/** Settings namespace = this bundle's profile entry id. */
+const NS_ID = 'context-distiller';
 
-/** Bilingual text dictionary. */
+/** Bilingual card copy; bound through ctx.locale when available. */
 const TXT = {
   zh: {
     title: '上下文压缩',
-    toggle: '为上下文压缩使用独立模型',
-    hintOff: '压缩使用当前会话模型。开启后可将摘要请求路由到更便宜或更快的模型。',
-    provider: '模型提供商',
-    providerHint: '在 DSH 模型设置中配置的提供商路由。',
-    providerPlaceholder: '— 选择提供商 —',
+    summary: '为上下文压缩使用独立模型、过滤点踩回答、设置绝对触发阈值。',
+    loading: '加载配置中...',
+    unavailable: '当前连接不支持写入配置（进程本地模式）。',
+    sectionCompact: '独立模型路由',
+    sectionFilter: '压缩过滤',
+    sectionThreshold: '压缩阈值',
+    sectionEngine: '显式压缩引擎（与内置压缩后端互斥）',
+    enabled: '启用',
+    provider: '提供商',
     model: '模型',
-    modelHint: '仅用于上下文压缩摘要的模型。',
-    modelPlaceholder: '— 选择模型 —',
+    flaggedTurns: '过滤被点踩回答所在的轮次',
+    wan: '触发阈值（万 token，0 跟随默认）',
+    thresholdRatio: '触发比例（0.01-0.99）',
+    retainRatio: '保留比例（0.01-0.99）',
+    headroomTokens: '压力余量（token）',
+    maxTokens: '单次压缩输出上限（token）',
+    compactionRetries: '压缩重试次数',
+    maxOverflowRetries: '溢出重试次数',
+    auto: '按压力自动压缩',
+    compressPrompt: '压缩指令（留空使用默认）',
     save: '保存',
     saving: '保存中...',
-    savedOn: '已保存。压缩路由已启用。',
-    savedOff: '已保存。压缩路由已关闭。',
+    discard: '放弃修改',
+    saved: '已保存，修改随 Profile 持久生效。',
     saveFail: '保存失败：',
-    selectWarn: '请在启用前选择提供商和模型。',
-    loadFail: '加载配置失败',
-    loading: '加载中...',
-    custom: '（自定义）',
-    filterSection: '压缩过滤',
-    filterToggle: '压缩时过滤被标记为有问题的对话',
-    filterHint: '在会话中对回答点"有问题"（/feedback）后，该轮对话不会进入压缩摘要。与独立模型开关互不影响。',
-    thresholdSection: '压缩阈值',
-    thresholdLabel: '触发阈值（万 token）',
-    thresholdHint: '上下文达到该 token 数即触发压缩，可选 1-100（即 1万-100万 token）。填 0 表示跟随默认策略。',
+    routeNeedsModel: '启用独立模型路由时必须同时填写提供商和模型。',
+    invalidNumber: '数值不合法：',
   },
   en: {
     title: 'Context Distiller',
-    toggle: 'Use a different model for compaction',
-    hintOff: 'Compaction uses your conversation model. Toggle on to route summaries to a cheaper or faster model.',
+    summary: 'Route compaction to a dedicated model, filter thumbs-downed turns, set an absolute trigger threshold.',
+    loading: 'Loading configuration...',
+    unavailable: 'This connection cannot write configuration (process-local mode).',
+    sectionCompact: 'Dedicated-model route',
+    sectionFilter: 'Compaction filter',
+    sectionThreshold: 'Compaction threshold',
+    sectionEngine: 'Explicit compression engine (exclusive with the stock backend)',
+    enabled: 'Enabled',
     provider: 'Provider',
-    providerHint: 'Provider routes configured in DSH Models settings.',
-    providerPlaceholder: '— Select provider —',
     model: 'Model',
-    modelHint: 'Model used only for context compaction summaries.',
-    modelPlaceholder: '— Select model —',
+    flaggedTurns: 'Filter turns containing thumbs-downed answers',
+    wan: 'Trigger threshold (10k tokens, 0 = default policy)',
+    thresholdRatio: 'Threshold ratio (0.01-0.99)',
+    retainRatio: 'Retain ratio (0.01-0.99)',
+    headroomTokens: 'Pressure headroom (tokens)',
+    maxTokens: 'Max tokens per compression',
+    compactionRetries: 'Compaction retries',
+    maxOverflowRetries: 'Overflow retries',
+    auto: 'Compact automatically on pressure',
+    compressPrompt: 'Compression instruction (blank = default)',
     save: 'Save',
     saving: 'Saving...',
-    savedOn: 'Saved. Compaction route active.',
-    savedOff: 'Saved. Compaction disabled.',
+    discard: 'Discard changes',
+    saved: 'Saved. Changes persist through the profile.',
     saveFail: 'Save failed: ',
-    selectWarn: 'Please select a provider and model before enabling.',
-    loadFail: 'Failed to load config',
-    loading: 'Loading...',
-    custom: ' (custom)',
-    filterSection: 'Compaction filter',
-    filterToggle: 'Filter out conversations reported as problematic during compaction',
-    filterHint: 'After you report an answer via the "report problem" action (/feedback), that whole turn is kept out of the compaction summary. Independent of the dedicated-model toggle.',
-    thresholdSection: 'Compaction threshold',
-    thresholdLabel: 'Trigger threshold (10k tokens)',
-    thresholdHint: 'Compact once the context reaches this many tokens; pick 1-100 (10k-1M tokens). 0 keeps the default policy.',
+    routeNeedsModel: 'Enabling the dedicated route requires both provider and model.',
+    invalidNumber: 'Invalid number: ',
   },
 };
 
-/** Current config snapshot returned by GET /context-distiller/config. */
-interface ConfigSnapshot {
-  compact: { enabled: boolean; provider: string; model: string };
-  filter: { flaggedTurns: boolean };
-  threshold: { wan: number };
-  engine: { enabled: boolean; thresholdRatio: number; retainRatio: number };
+/** One renderable field, mirroring the plugin's volatile config schema. */
+interface FieldSpec {
+  section: string;
+  field: string;
+  kind: 'bool' | 'text' | 'number';
+  min?: number;
+  max?: number;
+  integer?: boolean;
+  area?: boolean;
 }
 
-/** Upper bound of threshold.wan: 100 wan = 1,000,000 tokens. */
-const WAN_MAX = 100;
+const FIELDS: FieldSpec[] = [
+  { section: 'compact', field: 'enabled', kind: 'bool' },
+  { section: 'compact', field: 'provider', kind: 'text' },
+  { section: 'compact', field: 'model', kind: 'text' },
+  { section: 'filter', field: 'flaggedTurns', kind: 'bool' },
+  { section: 'threshold', field: 'wan', kind: 'number', min: 0, max: 100, integer: true },
+  { section: 'engine', field: 'enabled', kind: 'bool' },
+  { section: 'engine', field: 'thresholdRatio', kind: 'number', min: 0.01, max: 0.99 },
+  { section: 'engine', field: 'retainRatio', kind: 'number', min: 0.01, max: 0.99 },
+  { section: 'engine', field: 'headroomTokens', kind: 'number', min: 0, integer: true },
+  { section: 'engine', field: 'maxTokens', kind: 'number', min: 1, integer: true },
+  { section: 'engine', field: 'compactionRetries', kind: 'number', min: 0, integer: true },
+  { section: 'engine', field: 'maxOverflowRetries', kind: 'number', min: 0, integer: true },
+  { section: 'engine', field: 'auto', kind: 'bool' },
+  { section: 'engine', field: 'compressPrompt', kind: 'text', area: true },
+];
 
-/** Provider/model directory entry from GET /context-distiller/models. */
-interface ProviderEntry {
-  provider: string;
-  name: string;
-  models: Array<{ id: string; name: string }>;
-}
+const SECTION_TITLES: Array<[string, string]> = [
+  ['compact', 'sectionCompact'],
+  ['filter', 'sectionFilter'],
+  ['threshold', 'sectionThreshold'],
+  ['engine', 'sectionEngine'],
+];
 
-/** Inline styles (host CSS may override class names). */
-const S = {
-  wrap: { padding: '16px', fontFamily: 'system-ui, -apple-system, sans-serif' as const },
-  title: { margin: '0 0 16px', fontSize: '15px', fontWeight: 600 },
-  row: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' },
-  label: { fontSize: '13px', minWidth: '80px', color: 'var(--dsh-text, #333)' },
-  select: {
-    flex: 1, padding: '6px 8px', fontSize: '13px',
-    border: '1px solid var(--dsh-border, #ccc)', borderRadius: '4px',
-    background: 'var(--dsh-bg, #fff)', color: 'var(--dsh-text, #333)',
-  } as const,
-  toggle: { width: '18px', height: '18px', cursor: 'pointer' },
-  btn: {
-    padding: '6px 18px', fontSize: '13px', cursor: 'pointer',
-    border: 'none', borderRadius: '4px',
-    background: 'var(--dsh-accent, #4f46e5)', color: '#fff',
-  } as const,
-  hint: { fontSize: '12px', color: 'var(--dsh-text-sec, #888)', marginTop: '-8px', marginBottom: '12px' },
-  status: { fontSize: '12px', marginTop: '8px' },
-  divider: { border: 'none', borderTop: '1px solid var(--dsh-border, #e5e7eb)', margin: '16px 0' },
-  sectionTitle: { margin: '0 0 12px', fontSize: '13px', fontWeight: 600, color: 'var(--dsh-text-sec, #666)' },
+const inputStyle: React.CSSProperties = {
+  padding: '4px 8px', fontSize: '13px', border: '1px solid var(--dsh-border, #ccc)',
+  borderRadius: '4px', background: 'var(--dsh-bg, #fff)', color: 'var(--dsh-text, #333)',
 };
 
-/** Settings panel component. Receives `t` from slots.inject. */
-function SettingsPanel({ t }: { t: (key: string) => string }) {
-  const [enabled, setEnabled] = useState(false);
-  const [provider, setProvider] = useState('');
-  const [model, setModel] = useState('');
-  const [filterFlagged, setFilterFlagged] = useState(false);
-  const [wan, setWan] = useState(0);
-  const [providers, setProviders] = useState<ProviderEntry[]>([]);
-  const [saving, setSaving] = useState(false);
+interface CardProps {
+  view?: string;
+  t: (key: string) => string;
+  form: {
+    getSnapshot(): any;
+    subscribe(listener: () => void): () => void;
+    mutate(ops: readonly any[], expectedRevision?: number): Promise<boolean>;
+  };
+}
+
+/** The configuration card: summary line in list views, the staged form on the detail page. */
+function ConfigCard(props: CardProps) {
+  const { t, form, view } = props;
+  const snapshot: any = useSyncExternalStore(
+    (listener: () => void) => form.subscribe(listener),
+    () => form.getSnapshot()
+  );
+  const value: any = snapshot.value ?? {};
+  const [drafts, setDrafts] = useState<Record<string, unknown>>({});
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [loaded, setLoaded] = useState(false);
 
+  // Re-stage whenever the Host accepts a new section, unless the user has
+  // unsaved edits (their draft wins until saved or discarded).
   useEffect(() => {
-    Promise.all([
-      fetch('/context-distiller/config').then((r) => r.json()) as Promise<ConfigSnapshot>,
-      fetch('/context-distiller/models').then((r) => r.json()) as Promise<ProviderEntry[]>,
-    ])
-      .then(([cfg, list]) => {
-        setEnabled(cfg.compact.enabled);
-        setProvider(cfg.compact.provider || '');
-        setModel(cfg.compact.model || '');
-        setFilterFlagged(cfg.filter?.flaggedTurns ?? false);
-        setWan(cfg.threshold?.wan ?? 0);
-        setProviders(list || []);
-        setLoaded(true);
-      })
-      .catch(() => {
-        setMsg({ ok: false, text: t('loadFail') });
-        setLoaded(true);
-      });
-  }, []);
+    if (!dirty) setDrafts({});
+  }, [snapshot.value, dirty]);
 
-  const availableModels = providers.find((p) => p.provider === provider)?.models ?? [];
+  const read = (section: string, field: string): unknown => {
+    const key = `${section}.${field}`;
+    if (key in drafts) return drafts[key];
+    const sectionValue = value[section];
+    return sectionValue === undefined || sectionValue === null ? undefined : sectionValue[field];
+  };
+  const stage = (section: string, field: string, next: unknown): void => {
+    setDirty(true);
+    setDrafts((prev) => ({ ...prev, [`${section}.${field}`]: next }));
+  };
 
-  const save = async () => {
-    if (enabled && (!provider || !model)) {
-      setMsg({ ok: false, text: t('selectWarn') });
+  const invalid: string[] = [];
+  for (const f of FIELDS) {
+    if (f.kind !== 'number') continue;
+    const raw = read(f.section, f.field);
+    if (raw === undefined || raw === '') continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || (f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max)
+      || (f.integer === true && !Number.isInteger(n))) {
+      invalid.push(t(f.field === 'wan' ? 'wan' : f.field));
+    }
+  }
+  const provider = String(read('compact', 'provider') ?? '').trim();
+  const model = String(read('compact', 'model') ?? '').trim();
+  const routeIncomplete = read('compact', 'enabled') === true && (provider === '' || model === '');
+
+  const save = async (): Promise<void> => {
+    if (routeIncomplete) {
+      setMsg({ ok: false, text: t('routeNeedsModel') });
       return;
     }
-    setSaving(true);
+    if (invalid.length > 0) {
+      setMsg({ ok: false, text: t('invalidNumber') + invalid.join(', ') });
+      return;
+    }
+    const ops = FIELDS.flatMap((f) => {
+      const key = `${f.section}.${f.field}`;
+      if (!(key in drafts)) return [];
+      const next: unknown = drafts[key];
+      if (f.kind === 'number' && (next === '' || next === undefined)) {
+        return [{ op: 'unset', path: [f.section, f.field] }];
+      }
+      const value2 = f.kind === 'number' ? Number(next) : next;
+      return [{ op: 'set', path: [f.section, f.field], value: value2 }];
+    });
+    setBusy(true);
     setMsg(null);
     try {
-      const r = await fetch('/context-distiller/config', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          compact: {
-            enabled,
-            provider: enabled ? provider : '',
-            model: enabled ? model : '',
-          },
-          filter: {
-            flaggedTurns: filterFlagged,
-          },
-          threshold: {
-            wan: Math.min(WAN_MAX, Math.max(0, Math.round(wan) || 0)),
-          },
-        }),
-      });
-      if (r.ok) {
-        setMsg({ ok: true, text: enabled ? t('savedOn') : t('savedOff') });
-      } else {
-        const text = await r.text().catch(() => '');
-        setMsg({ ok: false, text: t('saveFail') + (text || r.status) });
+      const accepted = await form.mutate(ops, snapshot.revision);
+      setMsg({ ok: accepted, text: accepted ? t('saved') : `${t('saveFail')}rejected` });
+      if (accepted) {
+        setDrafts({});
+        setDirty(false);
       }
-    } catch (e) {
-      setMsg({ ok: false, text: t('saveFail') + (e as Error).message });
+    } catch (error) {
+      setMsg({ ok: false, text: t('saveFail') + (error as Error).message });
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   };
 
-  if (!loaded) {
-    return React.createElement('div', { style: S.wrap }, t('loading'));
-  }
+  if (view === 'summary') return React.createElement(React.Fragment, null, t('summary'));
+  if (snapshot.status === 'loading') return React.createElement('div', null, t('loading'));
+  if (snapshot.status === 'unavailable') return React.createElement('div', null, t('unavailable'));
 
-  return React.createElement('div', { style: S.wrap },
-    React.createElement('h3', { style: S.title }, t('title')),
-    // Toggle
-    React.createElement('div', { style: S.row },
-      React.createElement('label', { style: { ...S.label, display: 'flex', alignItems: 'center', gap: '6px' } },
+  const fieldNode = (f: FieldSpec): any => {
+    const key = `${f.section}.${f.field}`;
+    const current = read(f.section, f.field);
+    const label = t(f.field);
+    if (f.kind === 'bool') {
+      return React.createElement('label', {
+        key,
+        style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '6px' },
+      },
         React.createElement('input', {
           type: 'checkbox',
-          style: S.toggle,
-          checked: enabled,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setEnabled(e.target.checked),
+          checked: current === true,
+          disabled: !snapshot.writable,
+          onChange: (e: any) => stage(f.section, f.field, e.target.checked),
         }),
-        t('toggle')),
-    ),
-    !enabled && React.createElement('div', { style: S.hint }, t('hintOff')),
-    // Provider dropdown
-    enabled && React.createElement('div', { style: S.row },
-      React.createElement('span', { style: S.label }, t('provider')),
-      React.createElement('select', {
-        style: S.select,
-        value: provider,
-        onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
-          const p = e.target.value;
-          setProvider(p);
-          const entry = providers.find((x) => x.provider === p);
-          if (entry?.models.length) setModel(entry.models[0].id);
-        },
+        label);
+    }
+    const input = f.area === true
+      ? React.createElement('textarea', {
+        style: { ...inputStyle, width: '320px', minHeight: '72px', fontFamily: 'monospace' },
+        value: String(current ?? ''),
+        disabled: !snapshot.writable,
+        onChange: (e: any) => stage(f.section, f.field, e.target.value),
+      })
+      : React.createElement('input', {
+        style: { ...inputStyle, width: '180px' },
+        type: f.kind === 'number' ? 'number' : 'text',
+        min: f.min,
+        max: f.max,
+        step: f.integer === true ? 1 : 'any',
+        value: String(current ?? ''),
+        disabled: !snapshot.writable,
+        onChange: (e: any) => stage(f.section, f.field, e.target.value),
+      });
+    return React.createElement('label', {
+      key,
+      style: {
+        display: 'flex', alignItems: f.area === true ? 'flex-start' : 'center',
+        gap: '8px', fontSize: '13px', marginBottom: '6px',
       },
-        React.createElement('option', { value: '' }, t('providerPlaceholder')),
-        ...providers.map((p) =>
-          React.createElement('option', { key: p.provider, value: p.provider }, p.name || p.provider)
-        ),
-      ),
-    ),
-    enabled && React.createElement('div', { style: S.hint }, t('providerHint')),
-    // Model dropdown
-    enabled && React.createElement('div', { style: S.row },
-      React.createElement('span', { style: S.label }, t('model')),
-      React.createElement('select', {
-        style: S.select,
-        value: model,
-        onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setModel(e.target.value),
-      },
-        React.createElement('option', { value: '' }, t('modelPlaceholder')),
-        ...(availableModels.length > 0
-          ? availableModels.map((m) =>
-            React.createElement('option', { key: m.id, value: m.id }, m.name || m.id)
-          )
-          : model
-            ? [React.createElement('option', { key: model, value: model }, model + t('custom'))]
-            : []),
-      ),
-    ),
-    enabled && React.createElement('div', { style: S.hint }, t('modelHint')),
-    // Flagged-turn filter section (independent of the dedicated-model toggle)
-    React.createElement('hr', { style: S.divider }),
-    React.createElement('h4', { style: S.sectionTitle }, t('filterSection')),
-    React.createElement('div', { style: S.row },
-      React.createElement('label', { style: { ...S.label, display: 'flex', alignItems: 'center', gap: '6px' } },
-        React.createElement('input', {
-          type: 'checkbox',
-          style: S.toggle,
-          checked: filterFlagged,
-          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setFilterFlagged(e.target.checked),
-        }),
-        t('filterToggle')),
-    ),
-    React.createElement('div', { style: { ...S.hint, marginTop: '0' } }, t('filterHint')),
-    // Absolute-threshold section (independent of both toggles)
-    React.createElement('hr', { style: S.divider }),
-    React.createElement('h4', { style: S.sectionTitle }, t('thresholdSection')),
-    React.createElement('div', { style: S.row },
-      React.createElement('label', { style: S.label }, t('thresholdLabel')),
-      React.createElement('input', {
-        type: 'number',
-        style: S.select,
-        min: 0,
-        max: WAN_MAX,
-        step: 1,
-        value: wan,
-        onChange: (e: React.ChangeEvent<HTMLInputElement>) => setWan(Number(e.target.value) || 0),
-      }),
-    ),
-    React.createElement('div', { style: { ...S.hint, marginTop: '0' } }, t('thresholdHint')),
-    // Save
-    React.createElement('button', {
-      style: S.btn,
-      onClick: save,
-      disabled: saving || (enabled && (!provider || !model)),
     },
-      saving ? t('saving') : t('save')),
-    msg && React.createElement('div', {
-      style: { ...S.status, color: msg.ok ? 'var(--dsh-ok, #16a34a)' : 'var(--dsh-err, #dc2626)' },
-    }, msg.text),
-  );
+      React.createElement('span', { style: { minWidth: '180px' } }, label),
+      input);
+  };
+
+  const sectionNodes = SECTION_TITLES.map(([section, titleKey]) =>
+    React.createElement('div', { key: section, style: { marginBottom: '14px' } },
+      React.createElement('h4', {
+        style: { margin: '0 0 8px', fontSize: '13px', fontWeight: 600, color: 'var(--dsh-text-sec, #666)' },
+      }, t(titleKey)),
+      FIELDS.filter((f) => f.section === section).map(fieldNode)));
+
+  const children: any[] = [React.createElement('div', { key: 'sections' }, sectionNodes)];
+  children.push(React.createElement('div', {
+    key: 'actions',
+    style: { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' },
+  },
+    React.createElement('button', {
+      style: {
+        padding: '5px 18px', fontSize: '13px', cursor: 'pointer', border: 'none', borderRadius: '4px',
+        background: 'var(--dsh-accent, #4f46e5)', color: '#fff',
+      },
+      disabled: busy || !snapshot.writable,
+      onClick: () => { void save(); },
+    }, busy ? t('saving') : t('save')),
+    dirty ? React.createElement('button', {
+      style: {
+        padding: '5px 14px', fontSize: '13px', cursor: 'pointer',
+        border: '1px solid var(--dsh-border, #ccc)', borderRadius: '4px', background: 'transparent',
+        color: 'var(--dsh-text, #333)',
+      },
+      disabled: busy,
+      onClick: () => { setDrafts({}); setDirty(false); setMsg(null); },
+    }, t('discard')) : null,
+    msg ? React.createElement('span', {
+      style: { fontSize: '12px', color: msg.ok ? 'var(--dsh-ok, #16a34a)' : 'var(--dsh-err, #dc2626)' },
+    }, msg.text) : null));
+
+  return React.createElement('div', { style: { padding: '4px 0', fontFamily: 'system-ui, -apple-system, sans-serif' } }, children);
 }
 
-/** Client half entry. */
+/** Client half entry: bind the card to the Plugins page while the Host serves our namespace. */
 export function apply(ctx: Record<string, any>): void {
+  // Diagnostics: report the client's load state to the plugin's own probe
+  // route, so `/context-distiller/health` shows whether (and how far) the
+  // plugins-page card bound. Never throws into the host boot.
+  const win = window as any;
+  const probe = (stage: string): void => {
+    try {
+      void fetch('/context-distiller/probe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          stage,
+          hasConfigForms: ctx.configForms !== undefined && ctx.configForms !== null,
+          whileServedType: typeof ctx.configForms?.whileServed,
+          slotsType: typeof ctx.slots,
+          cardRegistered: win.__cdCardRegistered === true,
+        }),
+      }).catch(() => { /* diagnostics only */ });
+    } catch { /* diagnostics only */ }
+  };
+  probe('apply');
+  setTimeout(() => probe('late-3s'), 3000);
+  setTimeout(() => probe('late-10s'), 10000);
   try {
-    // Register bilingual dictionary so DSH locale can bind it.
-    if (ctx.locale && typeof ctx.locale.register === 'function') {
-      ctx.locale.register(NS, TXT);
+    const form = ctx.configForms.get(NS_ID);
+    const locale = ctx.locale;
+    let t: (key: string) => string = (key) => (TXT.en as Record<string, string>)[key] ?? key;
+    if (locale && typeof locale.register === 'function' && typeof locale.bind === 'function') {
+      locale.register(NS_ID, TXT);
+      t = locale.bind(NS_ID);
     }
-    const t: (key: string) => string =
-      ctx.locale && typeof ctx.locale.bind === 'function'
-        ? ctx.locale.bind(NS)
-        : (key: string) => TXT.en[key as keyof typeof TXT.en] ?? key;
-
-    if (!ctx.slots || typeof ctx.slots.inject !== 'function') {
-      console.warn('[context-distiller] slots service unavailable; settings panel not registered');
-      return;
+    const register = (): void => {
+      win.__cdCardRegistered = true;
+      probe('registered');
+      ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+        name: 'plugins.bundle.config',
+        key: NS_ID,
+        inject: () => ({ t, form }),
+      }, (props: any) => React.createElement(ConfigCard, { ...props, t, form })));
+    };
+    // While the Host serves the namespace the card exists; uninstalling or
+    // disabling the plugin withdraws it automatically.
+    if (ctx.configForms && typeof ctx.configForms.whileServed === 'function') {
+      const dispose = ctx.configForms.whileServed([NS_ID], register);
+      if (typeof ctx.effect === 'function') ctx.effect(() => dispose, 'context-distiller: plugins-page card');
+    } else {
+      register();
     }
-    ctx.slots.inject('settings.section', () => {
-      return ctx.slots.register({
-        name: 'settings.section',
-        id: 'context-distiller',
-        order: 50,
-        label: () => t('title'),
-        inject: () => ({ t }),
-      }, SettingsPanel);
-    });
-  } catch (e) {
-    console.error('[context-distiller] settings panel registration failed', e);
+  } catch (error) {
+    console.error('[context-distiller] plugins-page config card registration failed', error);
   }
 }

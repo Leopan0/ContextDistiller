@@ -5,9 +5,9 @@
  * both scoped to calls classified with `purpose: 'compaction'`:
  *
  *   1. Flagged-turn filter (optional, `filter.flaggedTurns`): removes the
- *      messages of conversation turns the user marked as problematic
- *      (`feedback/record`) from the summarization input, so a bad exchange
- *      never enters the checkpoint summary. Works with the stock
+ *      messages of conversation turns containing an answer the user rated
+ *      negative (`feedback/message-put`) from the summarization input, so a
+ *      bad exchange never enters the checkpoint summary. Works with the stock
  *      dsh-compaction-basic backend AND the plugin's own engine.
  *   2. Dedicated-model router (optional, `compact.enabled`): reroutes the
  *      call to the configured dedicated summarizer pair, leaving the

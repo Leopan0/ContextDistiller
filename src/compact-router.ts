@@ -5,9 +5,9 @@
  * both scoped to calls classified with `purpose: 'compaction'`:
  *
  *   1. Flagged-turn filter (optional, `filter.flaggedTurns`): removes the
- *      messages of conversation turns the user marked as problematic
- *      (`feedback/record`) from the summarization input, so a bad exchange
- *      never enters the checkpoint summary. Works with the stock
+ *      messages of conversation turns containing an answer the user rated
+ *      negative (`feedback/message-put`) from the summarization input, so a
+ *      bad exchange never enters the checkpoint summary. Works with the stock
  *      dsh-compaction-basic backend AND the plugin's own engine.
  *   2. Dedicated-model router (optional, `compact.enabled`): reroutes the
  *      call to the configured dedicated summarizer pair, leaving the
@@ -26,7 +26,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm';
 import { deepFreeze } from './dsh.js';
-import { collectFlaggedMessages, filterFlaggedMessages, type FilterableSession } from './flagged-filter.js';
+import { collectFlaggedMessageIds, filterFlaggedMessages, type FilterableSession } from './flagged-filter.js';
 import type { ResolvedPluginConfig } from './config.js';
 
 /**
@@ -80,7 +80,7 @@ function applyFlaggedFilter(
   if (session === undefined) return options;
 
   try {
-    const flagged = collectFlaggedMessages(session);
+    const flagged = collectFlaggedMessageIds(session);
     if (flagged.size === 0) return options;
     const { messages, removed } = filterFlaggedMessages(
       options.messages as readonly Message[],

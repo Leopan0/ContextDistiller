@@ -28,6 +28,7 @@ import {
   PLUGIN_NAME,
   resolvePluginConfig,
   type PluginConfig,
+  type PluginConfigInput,
   type ResolvedPluginConfig
 } from './config.js';
 import { installCompactRouter } from './compact-router.js';
@@ -36,6 +37,7 @@ import { clearDshFacade, setDshFacade, type DshFacade } from './dsh.js';
 import { installThresholdPatch } from './threshold-patch.js';
 
 export { Config, PLUGIN_NAME, resolvePluginConfig } from './config.js';
+export type { PluginConfig, PluginConfigInput } from './config.js';
 export { installCompactRouter, compactRoute } from './compact-router.js';
 export { installCompressionEngine, type CompressEngine } from './compress-engine.js';
 export { installThresholdPatch } from './threshold-patch.js';
@@ -48,8 +50,9 @@ export const name = PLUGIN_NAME;
  *
  * - `llm`: the model seam the waterfall listener hooks and streams through.
  * - `webServer`: hosts the `/context-distiller/health` smoke route.
- * - `sessions`: resolves the live session of a compaction call so flagged
- *   turns (`feedback/record`) can be filtered out of the summarization input.
+ * - `sessions`: resolves the live session of a compaction call so turns
+ *   flagged via negative message ratings (`feedback/message-put`) can be
+ *   filtered out of the summarization input.
  *
  * `dshLoader` is deliberately NOT required: the core router has no module-level
  * dsh dependency. It is probed optionally via `ctx.get` for the engine.
@@ -58,15 +61,6 @@ export const inject = ['llm', 'webServer', 'sessions'];
 
 /** Structural shape of `ctx.dshLoader`; only populated when dsh-loader is installed. */
 interface DshLoaderApi extends DshFacade {}
-
-/** Read the raw body of a node:http request as a string. */
-function readBody(req: { on: (ev: string, cb: (chunk?: Buffer) => void) => void }): Promise<string> {
-  return new Promise((resolve) => {
-    let data = '';
-    req.on('data', (chunk?: Buffer) => { if (chunk) data += chunk.toString(); });
-    req.on('end', () => resolve(data));
-  });
-}
 
 /** Minimal structural shape of the node:http responses written below. */
 interface JsonResponse {
@@ -80,7 +74,19 @@ function json(res: JsonResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-/** Policy snapshot shared verbatim by the health and config GET routes. */
+/** Last client-half diagnostic payload (undefined until a probe arrives). */
+let clientProbe: Record<string, unknown> | undefined;
+
+/** Read the raw body of a node:http request as a string. */
+function readBody(req: { on: (ev: string, cb: (chunk?: Buffer) => void) => void }): Promise<string> {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', (chunk?: Buffer) => { if (chunk) data += chunk.toString(); });
+    req.on('end', () => resolve(data));
+  });
+}
+
+/** Policy snapshot shared verbatim by the health route. */
 function policyView(r: ResolvedPluginConfig) {
   return {
     compact: {
@@ -93,37 +99,48 @@ function policyView(r: ResolvedPluginConfig) {
     engine: {
       enabled: r.engine.enabled,
       thresholdRatio: r.engine.thresholdRatio,
-      retainRatio: r.engine.retainRatio
+      retainRatio: r.engine.retainRatio,
+      headroomTokens: r.engine.headroomTokens,
+      maxTokens: r.engine.maxTokens,
+      auto: r.engine.auto
     }
   };
 }
 
+/**
+ * Unwrap one config section. Sections declared `.volatile()` in the schema
+ * reach `apply` as refs carrying the current value behind `.get()` (the 0.1.7
+ * live-update contract), so every read observes the latest edit without a
+ * plugin reload; plain sections pass through unchanged.
+ */
+function sectionValue<T>(value: unknown): T {
+  if (typeof value === 'object' && value !== null && typeof (value as { get?: unknown }).get === 'function') {
+    return (value as { get: () => T }).get();
+  }
+  return value as T;
+}
+
 /** Cordis plugin entry. */
 export function apply(ctx: Context, config: PluginConfig): void {
-  // Runtime override set by the settings panel (POST /config). Merged on top
-  // of the Cordis config block so UI changes take effect without a restart.
-  let runtimeOverride: Partial<PluginConfig> | undefined;
-
-  // Resolve config with a last-good cache so a later invalid config block never
-  // crashes an active session's compaction.
-  let lastRaw: PluginConfig | undefined;
+  // Resolve config on every access — volatile sections deliver live refs, so
+  // resolution is cheap and always current (edits made in the Plugin Manager's
+  // config form apply without a reload). A config block that fails validation
+  // never crashes an active session's compaction: the last good snapshot stays
+  // in force until the block is fixed.
   let lastGood: ResolvedPluginConfig | undefined;
   const resolved = (): ResolvedPluginConfig => {
-    const raw: PluginConfig = { ...config, ...runtimeOverride,
-      compact: { ...config.compact, ...runtimeOverride?.compact },
-      filter: { ...config.filter, ...runtimeOverride?.filter },
-      threshold: { ...config.threshold, ...runtimeOverride?.threshold },
-      engine: { ...config.engine, ...runtimeOverride?.engine },
+    const raw: PluginConfigInput = {
+      compact: sectionValue(config.compact),
+      filter: sectionValue(config.filter),
+      threshold: sectionValue(config.threshold),
+      engine: sectionValue(config.engine),
     };
-    if (raw === lastRaw && lastGood !== undefined) return lastGood;
     try {
       const next = resolvePluginConfig(raw);
-      lastRaw = raw;
       lastGood = next;
       return next;
     } catch (error) {
       if (lastGood === undefined) throw error;
-      lastRaw = raw;
       ctx.logger.error(
         'context-distiller: keeping the last good configuration after an invalid config block'
       );
@@ -136,8 +153,9 @@ export function apply(ctx: Context, config: PluginConfig): void {
   //    Only needs ctx.llm (in inject). Never touches dshLoader.
   const disposeRouter = installCompactRouter(ctx, resolved);
 
-  // 2) Health smoke route + config read/write routes.
-  //    All use the raw node:http handler shape (kind/path/handler).
+  // 2) Health smoke route. Configuration happens in the Plugin Manager's
+  //    native config form (volatile schema fields, persisted through the
+  //    profile patch) or a cordis.patch.yml config block.
   const disposeHealth = ctx.webServer.register({
     kind: 'exact',
     path: `/${PLUGIN_NAME}/health`,
@@ -146,88 +164,31 @@ export function apply(ctx: Context, config: PluginConfig): void {
         status: 'ok',
         plugin: PLUGIN_NAME,
         ...policyView(resolved()),
+        clientProbe,
         uptime: process.uptime()
       });
     }
   });
 
-  // GET returns current config; POST updates runtime override. Same path,
-  // dispatched by method — webServer.register rejects duplicate exact routes.
-  const disposeConfig = ctx.webServer.register({
+  // 2b) Client-half diagnostic probe: the browser bundle reports its load
+  //     state here so the health route shows whether the plugins-page card
+  //     bound (and why not, when it did not).
+  const disposeProbe = ctx.webServer.register({
     kind: 'exact',
-    path: `/${PLUGIN_NAME}/config`,
-    handler: async (req, res) => {
-      if (req.method === 'GET') {
-        json(res, 200, policyView(resolved()));
+    path: `/${PLUGIN_NAME}/probe`,
+    handler: (req, res) => {
+      if (req.method !== 'POST') {
+        json(res, 405, { error: 'method not allowed' });
         return;
       }
-      if (req.method === 'POST') {
+      void readBody(req).then((body) => {
         try {
-          const text = await readBody(req);
-          const body = JSON.parse(text) as Partial<PluginConfig>;
-          const cur = resolved();
-          runtimeOverride = {
-            compact: {
-              enabled: body.compact?.enabled ?? cur.compact.enabled,
-              provider: body.compact?.provider ?? cur.compact.provider,
-              model: body.compact?.model ?? cur.compact.model,
-            },
-            filter: {
-              flaggedTurns: body.filter?.flaggedTurns ?? cur.filter.flaggedTurns,
-            },
-            threshold: {
-              wan: body.threshold?.wan ?? cur.threshold.wan,
-            },
-          };
-          lastRaw = undefined; // force re-resolve
-          const r = resolved();
-          ctx.logger.info(
-            `context-distiller config updated (router: ${r.compact.enabled ? 'on' : 'off'}, ` +
-            `provider: ${r.compact.provider}, model: ${r.compact.model}; ` +
-            `flagged-turn filter: ${r.filter.flaggedTurns ? 'on' : 'off'}; ` +
-            `threshold: ${r.threshold.wan}wan)`
-          );
-          json(res, 200, { ok: true, compact: r.compact, filter: r.filter, threshold: r.threshold });
-        } catch (error) {
-          ctx.logger.error('context-distiller: config update failed');
-          ctx.logger.error(error);
-          json(res, 400, { ok: false, error: (error as Error).message });
+          clientProbe = JSON.parse(body) as Record<string, unknown>;
+        } catch {
+          clientProbe = { raw: body.slice(0, 500) };
         }
-        return;
-      }
-      json(res, 405, { error: 'method not allowed' });
-    }
-  });
-
-  // GET /context-distiller/models → provider/model directory from ctx.llm.
-  const disposeModels = ctx.webServer.register({
-    kind: 'exact',
-    path: `/${PLUGIN_NAME}/models`,
-    handler: async (_req, res) => {
-      try {
-        const providers = ctx.llm.listProviders();
-        const result: Array<{
-          provider: string;
-          name: string;
-          models: Array<{ id: string; name: string }>;
-        }> = [];
-        for (const p of providers) {
-          try {
-            const models = await ctx.llm.listModels(p.id);
-            result.push({
-              provider: p.id,
-              name: p.name,
-              models: models.map((m) => ({ id: m.id, name: m.name })),
-            });
-          } catch {
-            // Provider might error on listModels; include it with empty models.
-            result.push({ provider: p.id, name: p.name, models: [] });
-          }
-        }
-        json(res, 200, result);
-      } catch (error) {
-        json(res, 500, { error: (error as Error).message });
-      }
+        json(res, 200, { ok: true });
+      });
     }
   });
 
@@ -238,13 +199,12 @@ export function apply(ctx: Context, config: PluginConfig): void {
     () => () => {
       disposeRouter?.();
       disposeHealth?.();
-      disposeConfig?.();
-      disposeModels?.();
+      disposeProbe?.();
       disposeThreshold?.();
       compressionEngine = undefined;
       clearDshFacade();
     },
-    'context-distiller: router, health/config/models routes, threshold patch, and engine lifecycle'
+    'context-distiller: router, health/probe routes, threshold patch, and engine lifecycle'
   );
 
   // 3) Optional explicit-prompt compression engine.
