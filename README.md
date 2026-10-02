@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.svg" width="64" height="64" alt="ContextDistiller">
+</p>
+
 # ContextDistiller · 上下文压缩
 
 [English](#english) | [中文](#中文)
@@ -130,6 +134,20 @@ curl http://localhost:<port>/context-distiller/health
 # {"status":"ok","compact":{"enabled":true,...}}
 ```
 
+### Icon and display metadata
+
+The Plugin Manager card, the bundle detail view, and the settings plugin
+inventory read their artwork and label straight from the package manifest,
+without activating the plugin:
+
+- `assets/icon.svg` — declared as the top-level `icon` field in `package.json`,
+  a manifest-relative SVG/PNG/JPEG/WebP file of at most 256 KiB.
+- `locale/en.json` / `locale/zh.json` — `meta.title` and `meta.description`,
+  picked up per the DSH interface language.
+
+`pnpm run gates` checks both, so a broken icon path or a missing locale file
+fails the build instead of silently shipping a blank card.
+
 ### Develop
 
 ```bash
@@ -260,6 +278,19 @@ config:
 curl http://localhost:<port>/context-distiller/health
 # {"status":"ok","compact":{"enabled":true,...}}
 ```
+
+### 图标与展示元数据
+
+插件管理页的卡片、包详情页和设置里的插件清单，会直接读包清单里的图标与文案，
+**不会激活插件**：
+
+- `assets/icon.svg` — 由 `package.json` 顶层的 `icon` 字段声明，相对清单目录的
+  SVG/PNG/JPEG/WebP 文件，上限 256 KiB。
+- `locale/en.json` / `locale/zh.json` — 提供 `meta.title` 与
+  `meta.description`，跟随 DSH 界面语言自动切换。
+
+`pnpm run gates` 会校验这两项：图标路径失效或本地化文件缺失会直接让检查失败，
+而不是悄悄发布一张空白卡片。
 
 ### 开发
 

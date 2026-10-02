@@ -1,0 +1,12 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M16.6 6.4A1.4 1.4 0 0 1 19.4 6.4L19.4 8.8L23.5 8.8L18 11.8L12.5 8.8L16.6 8.8Z" fill="url(#ctxd-grad)"/>
+  <path d="M16.6 29.6A1.4 1.4 0 0 0 19.4 29.6L19.4 27.2L23.5 27.2L18 24.2L12.5 27.2L16.6 27.2Z" fill="url(#ctxd-grad)"/>
+  <rect x="7.5" y="13.4" width="21" height="3" rx="1.5" fill="url(#ctxd-grad)"/>
+  <rect x="11.5" y="19.6" width="13" height="3" rx="1.5" fill="url(#ctxd-grad)"/>
+  <defs>
+    <linearGradient id="ctxd-grad" x1="18" y1="5" x2="18" y2="31" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7AB7FF"/>
+      <stop offset="1" stop-color="#4A65E8"/>
+    </linearGradient>
+  </defs>
+</svg>

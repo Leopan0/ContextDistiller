@@ -1,17 +1,31 @@
 // Zero-dependency consistency gate for context-distiller.
 // Verifies the packaging contracts that cause load failures when wrong:
 //   - package.json required fields / exports / dsh.bundle.patch / files
+//   - plugin display metadata: top-level `icon` + locale/<lang>.json meta
 //   - cordis.patch.yml insert id+name == package name
 //   - src/index.ts exports inject + apply
 // Run: node scripts/gates/run.mjs   (exit 1 on failure)
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, relative, extname, isAbsolute } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const failures = [];
 const ok = (cond, msg) => {
   if (!cond) failures.push(msg);
+};
+
+/**
+ * Does a package.json#files entry publish `relativePath`? An exact path, a bare
+ * directory, and a directory glob all ship the file; anything else does not.
+ */
+const ships = (entry, relativePath) => {
+  if (typeof entry !== 'string') return false;
+  const raw = entry.replace(/^\.\//, '');
+  const target = relativePath.replace(/^\.\//, '');
+  if (raw === target) return true;
+  const base = raw.replace(/\/\*\*?.*$/, '').replace(/\/$/, '');
+  return base !== '' && target.startsWith(`${base}/`);
 };
 
 // --- package.json ---
@@ -38,6 +52,66 @@ ok(
   Array.isArray(pkg.files) && pkg.files.includes('cordis.patch.yml'),
   'files must include "cordis.patch.yml"'
 );
+
+// --- plugin display metadata: icon + locale ---
+// dsh's lib/types/package-meta.js reads a top-level `icon` (manifest-relative
+// SVG/PNG/JPEG/WebP, at most 256 KiB, still inside the manifest directory after
+// realpath) plus locale/<language>.json `meta.title` / `meta.description`,
+// resolving both through package.json#exports without evaluating plugin code.
+// Failures here never break the plugin — they silently degrade the Plugin
+// Manager card — so they are gated rather than left to be noticed by eye.
+const ICON_EXTENSIONS = new Set(['.svg', '.png', '.jpg', '.jpeg', '.webp']);
+const MAX_ICON_BYTES = 256 * 1024;
+
+ok(
+  typeof pkg.icon === 'string' && pkg.icon.trim() !== '',
+  'package.json#icon must be a non-empty string'
+);
+if (typeof pkg.icon === 'string' && pkg.icon.trim() !== '') {
+  const icon = pkg.icon;
+  ok(!isAbsolute(icon) && !/^[A-Za-z][A-Za-z\d+.-]*:/u.test(icon),
+    `package.json#icon must be a relative file path (got ${icon})`);
+  ok(ICON_EXTENSIONS.has(extname(icon).toLowerCase()),
+    `package.json#icon must be SVG, PNG, JPEG or WebP (got ${icon})`);
+  const iconPath = resolve(root, icon);
+  ok(existsSync(iconPath), `package.json#icon target is missing: ${icon}`);
+  if (existsSync(iconPath)) {
+    ok(statSync(iconPath).isFile(), `package.json#icon target must be a regular file: ${icon}`);
+    ok(statSync(iconPath).size <= MAX_ICON_BYTES, `package.json#icon target exceeds 256 KiB: ${icon}`);
+    const local = relative(root, realpathSync(iconPath));
+    ok(!local.startsWith('..') && !isAbsolute(local),
+      `package.json#icon must stay inside the package directory: ${icon}`);
+    ok(Array.isArray(pkg.files) && pkg.files.some((entry) => ships(entry, icon)),
+      `files must ship the icon, or the published package renders no card art (${icon})`);
+  }
+}
+
+ok(
+  Object.keys(pkg.exports ?? {}).some((key) => key.startsWith('./locale/')),
+  'exports must expose ./locale/*.json so dsh can read plugin display text'
+);
+ok(Array.isArray(pkg.files) && pkg.files.some((entry) => ships(entry, 'locale/en.json')),
+  'files must ship locale/*.json, or the published package renders no display text');
+
+const localeDir = join(root, 'locale');
+const LANGUAGE_FILE = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*\.json$/;
+ok(existsSync(localeDir), 'locale/ directory is missing (plugin display text)');
+if (existsSync(localeDir)) {
+  const localeFiles = readdirSync(localeDir).filter((file) => file.endsWith('.json'));
+  ok(localeFiles.includes('en.json'), 'locale/en.json is required as the English fallback');
+  for (const file of localeFiles) {
+    ok(LANGUAGE_FILE.test(file), `locale/${file} must be named after a language id`);
+    try {
+      const meta = JSON.parse(readFileSync(join(localeDir, file), 'utf8')).meta;
+      ok(typeof meta?.title === 'string' && meta.title.trim() !== '',
+        `locale/${file}: meta.title must be a non-empty string`);
+      ok(typeof meta?.description === 'string' && meta.description.trim() !== '',
+        `locale/${file}: meta.description must be a non-empty string`);
+    } catch (error) {
+      failures.push(`locale/${file} must be JSON with a meta block: ${error.message}`);
+    }
+  }
+}
 
 // --- cordis.patch.yml ---
 const patchPath = join(root, 'cordis.patch.yml');

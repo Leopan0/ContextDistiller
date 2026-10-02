@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Context Distiller",
+    "description": "Run context compaction with a dedicated model, separate from your conversation model."
+  }
+}

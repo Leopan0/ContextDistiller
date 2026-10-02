@@ -94,10 +94,85 @@ interface ProviderEntry {
   models: Array<{ id: string; name: string }>;
 }
 
+/**
+ * The plugin mark, mirrored from `assets/icon.svg` (the file dsh reads via the
+ * package.json `icon` field, so the settings panel and the plugin card show the
+ * same artwork): two arrows pressing in from above and below, squeezing two
+ * conversation turns down to the distilled checkpoint line.
+ *
+ * Drawn on the 36-unit grid the official dsh plugin icons use — solid shapes on
+ * a transparent background, one blue-to-indigo linear gradient — not a
+ * currentColor stroke glyph. Deliberately reduced to four shapes: at the 20px
+ * the settings panel renders, three or more thin bars collapse into mush.
+ *
+ * Inlined here so the browser bundle needs no asset request; the gradient id is
+ * namespaced because SVG gradient ids share one document-wide namespace across
+ * every plugin on the page.
+ *
+ * These constants are the source of truth for the geometry shared with
+ * `assets/icon.svg`; change both together.
+ */
+const ICON_VIEW_BOX = '0 0 36 36';
+
+/** Arrow pressing down on the context turns (rounded stem, solid head). */
+const ICON_ARROW_DOWN = 'M16.6 6.4A1.4 1.4 0 0 1 19.4 6.4L19.4 8.8L23.5 8.8L18 11.8L12.5 8.8L16.6 8.8Z';
+
+/** Arrow pressing up on the context turns; the vertical mirror of the above. */
+const ICON_ARROW_UP = 'M16.6 29.6A1.4 1.4 0 0 0 19.4 29.6L19.4 27.2L23.5 27.2L18 24.2L12.5 27.2L16.6 27.2Z';
+
+/** Context turns, the second shorter than the first — the compression result. */
+const ICON_BARS = [
+  { x: 7.5, y: 13.4, width: 21 },
+  { x: 11.5, y: 19.6, width: 13 },
+];
+
+/** Stroke-free bar height; also its corner radius, making each bar a pill. */
+const ICON_BAR_HEIGHT = 3;
+
+/** Fill of every shape in the mark. */
+const ICON_GRADIENT_ID = 'context-distiller-mark-gradient';
+
+/** The plugin mark, rendered at `size` px in the brand gradient. */
+function PluginIcon({ size = 20 }: { size?: number }) {
+  const fill = `url(#${ICON_GRADIENT_ID})`;
+  return React.createElement('svg', {
+    width: size,
+    height: size,
+    viewBox: ICON_VIEW_BOX,
+    fill: 'none',
+    'aria-hidden': 'true',
+    focusable: 'false',
+    style: { flex: '0 0 auto', display: 'block' },
+  },
+    React.createElement('defs', { key: 'defs' },
+      React.createElement('linearGradient', {
+        id: ICON_GRADIENT_ID,
+        x1: 18, y1: 5, x2: 18, y2: 31,
+        gradientUnits: 'userSpaceOnUse',
+      },
+        React.createElement('stop', { key: 'from', stopColor: '#7ab7ff' }),
+        React.createElement('stop', { key: 'to', offset: 1, stopColor: '#4a65e8' }),
+      ),
+    ),
+    React.createElement('path', { key: 'down', d: ICON_ARROW_DOWN, fill }),
+    React.createElement('path', { key: 'up', d: ICON_ARROW_UP, fill }),
+    ...ICON_BARS.map((bar) => React.createElement('rect', {
+      key: `${bar.y}`,
+      x: bar.x,
+      y: bar.y,
+      width: bar.width,
+      height: ICON_BAR_HEIGHT,
+      rx: ICON_BAR_HEIGHT / 2,
+      fill,
+    })),
+  );
+}
+
 /** Inline styles (host CSS may override class names). */
 const S = {
   wrap: { padding: '16px', fontFamily: 'system-ui, -apple-system, sans-serif' as const },
-  title: { margin: '0 0 16px', fontSize: '15px', fontWeight: 600 },
+  heading: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' },
+  title: { margin: 0, fontSize: '15px', fontWeight: 600 },
   row: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' },
   label: { fontSize: '13px', minWidth: '80px', color: 'var(--dsh-text, #333)' },
   select: {
@@ -194,7 +269,10 @@ function SettingsPanel({ t }: { t: (key: string) => string }) {
   }
 
   return React.createElement('div', { style: S.wrap },
-    React.createElement('h3', { style: S.title }, t('title')),
+    React.createElement('div', { style: S.heading },
+      React.createElement(PluginIcon, { size: 20 }),
+      React.createElement('h3', { style: S.title }, t('title')),
+    ),
     // Toggle
     React.createElement('div', { style: S.row },
       React.createElement('label', { style: { ...S.label, display: 'flex', alignItems: 'center', gap: '6px' } },
