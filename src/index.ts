@@ -122,18 +122,21 @@ function sectionValue<T>(value: unknown): T {
 
 /** Cordis plugin entry. */
 export function apply(ctx: Context, config: PluginConfig): void {
+  // Runtime override set by the settings panel (POST /config). Merged on top
+  // of the Cordis config block so UI changes take effect without a restart.
+  let runtimeOverride: Partial<PluginConfigInput> | undefined;
+
   // Resolve config on every access — volatile sections deliver live refs, so
-  // resolution is cheap and always current (edits made in the Plugin Manager's
-  // config form apply without a reload). A config block that fails validation
-  // never crashes an active session's compaction: the last good snapshot stays
-  // in force until the block is fixed.
+  // resolution is cheap and always current. A config block that fails
+  // validation never crashes an active session's compaction: the last good
+  // snapshot stays in force until the block is fixed.
   let lastGood: ResolvedPluginConfig | undefined;
   const resolved = (): ResolvedPluginConfig => {
     const raw: PluginConfigInput = {
-      compact: sectionValue(config.compact),
-      filter: sectionValue(config.filter),
-      threshold: sectionValue(config.threshold),
-      engine: sectionValue(config.engine),
+      compact: { ...sectionValue(config.compact), ...runtimeOverride?.compact },
+      filter: { ...sectionValue(config.filter), ...runtimeOverride?.filter },
+      threshold: { ...sectionValue(config.threshold), ...runtimeOverride?.threshold },
+      engine: { ...sectionValue(config.engine), ...runtimeOverride?.engine },
     };
     try {
       const next = resolvePluginConfig(raw);
@@ -192,6 +195,96 @@ export function apply(ctx: Context, config: PluginConfig): void {
     }
   });
 
+  // 2c) Settings-panel config routes. GET returns the resolved policy; POST
+  //     merges a partial body into the runtime override so changes apply
+  //     immediately without a plugin reload.
+  const disposeConfig = ctx.webServer.register({
+    kind: 'exact',
+    path: `/${PLUGIN_NAME}/config`,
+    handler: async (req, res) => {
+      if (req.method === 'GET') {
+        json(res, 200, policyView(resolved()));
+        return;
+      }
+      if (req.method === 'POST') {
+        try {
+          const text = await readBody(req);
+          const body = JSON.parse(text) as Partial<PluginConfigInput>;
+          const cur = resolved();
+          runtimeOverride = {
+            compact: {
+              enabled: body.compact?.enabled ?? cur.compact.enabled,
+              provider: body.compact?.provider ?? cur.compact.provider,
+              model: body.compact?.model ?? cur.compact.model,
+            },
+            filter: {
+              flaggedTurns: body.filter?.flaggedTurns ?? cur.filter.flaggedTurns,
+            },
+            threshold: {
+              wan: body.threshold?.wan ?? cur.threshold.wan,
+            },
+            engine: {
+              enabled: body.engine?.enabled ?? cur.engine.enabled,
+              thresholdRatio: body.engine?.thresholdRatio ?? cur.engine.thresholdRatio,
+              retainRatio: body.engine?.retainRatio ?? cur.engine.retainRatio,
+              headroomTokens: body.engine?.headroomTokens ?? cur.engine.headroomTokens,
+              maxTokens: body.engine?.maxTokens ?? cur.engine.maxTokens,
+              compactionRetries: body.engine?.compactionRetries ?? cur.engine.compactionRetries,
+              maxOverflowRetries: body.engine?.maxOverflowRetries ?? cur.engine.maxOverflowRetries,
+              auto: body.engine?.auto ?? cur.engine.auto,
+              compressPrompt: body.engine?.compressPrompt ?? cur.engine.compressPrompt,
+            },
+          };
+          const r = resolved();
+          ctx.logger.info(
+            `context-distiller config updated (router: ${r.compact.enabled ? 'on' : 'off'}, ` +
+            `provider: ${r.compact.provider}, model: ${r.compact.model}; ` +
+            `flagged-turn filter: ${r.filter.flaggedTurns ? 'on' : 'off'}; ` +
+            `threshold: ${r.threshold.wan}wan; engine: ${r.engine.enabled ? 'on' : 'off'})`
+          );
+          json(res, 200, { ok: true, ...policyView(r) });
+        } catch (error) {
+          ctx.logger.error('context-distiller: config update failed');
+          ctx.logger.error(error);
+          json(res, 400, { ok: false, error: (error as Error).message });
+        }
+        return;
+      }
+      json(res, 405, { error: 'method not allowed' });
+    }
+  });
+
+  // 2d) Provider/model directory from ctx.llm, for the settings dropdowns.
+  const disposeModels = ctx.webServer.register({
+    kind: 'exact',
+    path: `/${PLUGIN_NAME}/models`,
+    handler: async (_req, res) => {
+      try {
+        const providers = ctx.llm.listProviders();
+        const result: Array<{
+          provider: string;
+          name: string;
+          models: Array<{ id: string; name: string }>;
+        }> = [];
+        for (const p of providers) {
+          try {
+            const models = await ctx.llm.listModels(p.id);
+            result.push({
+              provider: p.id,
+              name: p.name,
+              models: models.map((m) => ({ id: m.id, name: m.name })),
+            });
+          } catch {
+            result.push({ provider: p.id, name: p.name, models: [] });
+          }
+        }
+        json(res, 200, result);
+      } catch (error) {
+        json(res, 500, { error: (error as Error).message });
+      }
+    }
+  });
+
   // Lifecycle cleanup.
   let compressionEngine: CompressEngine | undefined;
   let disposeThreshold: (() => void) | undefined;
@@ -200,11 +293,13 @@ export function apply(ctx: Context, config: PluginConfig): void {
       disposeRouter?.();
       disposeHealth?.();
       disposeProbe?.();
+      disposeConfig?.();
+      disposeModels?.();
       disposeThreshold?.();
       compressionEngine = undefined;
       clearDshFacade();
     },
-    'context-distiller: router, health/probe routes, threshold patch, and engine lifecycle'
+    'context-distiller: router, health/probe/config/models routes, threshold patch, and engine lifecycle'
   );
 
   // 3) Optional explicit-prompt compression engine.
